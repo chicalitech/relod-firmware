@@ -17,6 +17,7 @@
 
 #define CURRENT_FIRMWARE_VERSION "6.0"
 
+
 SparkFun_VL53L5CX myImager;
 VL53L5CX_ResultsData measurementData;
 SFE_MAX1704X lipo;
@@ -51,7 +52,7 @@ String getFirmwareUpdateUrl() {
   int httpCode = http.GET();
   if (httpCode == 200) {
     String payload = http.getString();
-    JsonDocument<512> doc;
+    StaticJsonDocument<512> doc;
     if (!deserializeJson(doc, payload)) {
       if (String(doc["version"]) != CURRENT_FIRMWARE_VERSION) {
         firmwareUrl = String(doc["url"]);
@@ -244,7 +245,7 @@ void sendDataToServer(float temperature, float humidity, float acceleration_x, f
   http.begin(serverName);
   http.addHeader("Content-Type", "application/json");
 
-  JsonDocument<1024> jsonDoc;
+  StaticJsonDocument<1024> jsonDoc;
   jsonDoc["device_id"] = readMacAddress();
   jsonDoc["temperature"] = temperature;
   jsonDoc["humidity"] = humidity;
