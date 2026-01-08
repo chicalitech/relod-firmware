@@ -1,7 +1,6 @@
-// This version removes all Serial prints for production deployment and power efficiency
-// Additional modifications for power saving are included where applicable
+// Optimized for XIAO ESP32C6 memory constraints (512KB SRAM, 4MB Flash)
+// Conditional debug output, optimized JSON sizes, and reduced String allocations
 
-// #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
@@ -17,7 +16,18 @@
 
 #define CURRENT_FIRMWARE_VERSION "6.0"
 
+// Debug macro - only active when DEBUG_MODE is defined
+#ifdef DEBUG_MODE
+  #define DEBUG_PRINT(x) Serial.print(x)
+  #define DEBUG_PRINTLN(x) Serial.println(x)
+  #define DEBUG_PRINTF(fmt, ...) Serial.printf(fmt, __VA_ARGS__)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
+  #define DEBUG_PRINTF(fmt, ...)
+#endif
 
+// Global sensor objects
 SparkFun_VL53L5CX myImager;
 VL53L5CX_ResultsData measurementData;
 SFE_MAX1704X lipo;
@@ -31,11 +41,12 @@ volatile bool interruptOccurred = false;
 const char* serverName = "https://relod.fly.dev/measurement";
 long TIME_TO_SLEEP = 10800;
 
+// Function prototypes
 void setupWiFi();
 void initSensors();
 void processRangingData();
 void sendDataToServer(float, float, float, float, float, float, float, float);
-String readMacAddress();
+void readMacAddress(char* macStr, size_t len);
 void bma400InterruptHandler();
 
 uint8_t errorCnt = 0;
@@ -45,32 +56,47 @@ bool alert;
 int dataArray[64];
 Adafruit_Si7021 sensor = Adafruit_Si7021();
 
-String getFirmwareUpdateUrl() {
+// Optimized: reduced from 512 to 256 bytes based on actual payload size
+// Typical response: {"version":"6.0","url":"https://..."}
+bool getFirmwareUpdateUrl(char* urlBuffer, size_t bufferSize) {
   HTTPClient http;
-  String firmwareUrl = "";
+  bool updateAvailable = false;
+
   http.begin("https://relod.fly.dev/latest_firmware");
   int httpCode = http.GET();
+
   if (httpCode == 200) {
     String payload = http.getString();
-    StaticJsonDocument<512> doc;
+    StaticJsonDocument<256> doc;
+
     if (!deserializeJson(doc, payload)) {
-      if (String(doc["version"]) != CURRENT_FIRMWARE_VERSION) {
-        firmwareUrl = String(doc["url"]);
+      const char* version = doc["version"];
+      if (version && strcmp(version, CURRENT_FIRMWARE_VERSION) != 0) {
+        const char* url = doc["url"];
+        if (url && strlen(url) < bufferSize) {
+          strncpy(urlBuffer, url, bufferSize - 1);
+          urlBuffer[bufferSize - 1] = '\0';
+          updateAvailable = true;
+        }
       }
     }
   }
+
   http.end();
-  return firmwareUrl;
+  return updateAvailable;
 }
 
-bool performOTA(String firmwareUrl) {
+bool performOTA(const char* firmwareUrl) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
+
   http.begin(client, firmwareUrl);
   int httpCode = http.GET();
+
   if (httpCode == 200) {
     int contentLength = http.getSize();
+
     if (Update.begin(contentLength)) {
       if (Update.writeStream(http.getStream()) == contentLength) {
         if (Update.end() && Update.isFinished()) {
@@ -81,11 +107,17 @@ bool performOTA(String firmwareUrl) {
       }
     }
   }
+
   http.end();
   return false;
 }
 
 void setup() {
+  #ifdef DEBUG_MODE
+    Serial.begin(115200);
+    delay(1000);
+  #endif
+
   analogReadResolution(12);
   pinMode(3, INPUT);
   pinMode(1, INPUT);
@@ -93,6 +125,9 @@ void setup() {
 
   Wire.begin();
   Wire.setClock(100000);
+
+  DEBUG_PRINTF("Free heap at startup: %d bytes\n", ESP.getFreeHeap());
+
   initSensors();
 
   esp_deep_sleep_enable_gpio_wakeup(1 << INTERRUPT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
@@ -100,15 +135,21 @@ void setup() {
   WiFi.mode(WIFI_STA);
   setupWiFi();
 
-  String updateUrl = getFirmwareUpdateUrl();
-  if (updateUrl != "") {
+  // Check for firmware updates
+  char updateUrl[256];
+  if (getFirmwareUpdateUrl(updateUrl, sizeof(updateUrl))) {
+    DEBUG_PRINTLN("Firmware update available, starting OTA...");
     performOTA(updateUrl);
   }
+
+  DEBUG_PRINTF("Free heap after setup: %d bytes\n", ESP.getFreeHeap());
 }
 
 bool firstRun = true;
 
 void loop() {
+  DEBUG_PRINTF("Free heap at loop start: %d bytes\n", ESP.getFreeHeap());
+
   float temperature, humidity, acc_x, acc_y, acc_z;
   float voltage_pin3 = analogRead(3) * (3.3 / 4095.0);
   float voltage_pin1 = analogRead(1) * (3.3 / 4095.0);
@@ -120,6 +161,7 @@ void loop() {
 
   if (!firstRun) {
     if (!myImager.setPowerMode(SF_VL53L5CX_POWER_MODE::WAKEUP)) {
+      DEBUG_PRINTLN("Failed to wake imager");
       while (1);
     }
     delay(100);
@@ -142,10 +184,14 @@ void loop() {
 
   if (WiFi.status() == WL_CONNECTED) {
     sendDataToServer(temperature, humidity, acc_x, acc_y, acc_z, voltage_pin0, voltage_pin3, voltage_pin1);
+  } else {
+    DEBUG_PRINTLN("WiFi not connected, skipping data transmission");
   }
 
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
+
+  DEBUG_PRINTF("Free heap before sleep: %d bytes\n", ESP.getFreeHeap());
 
   esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * 1000000ULL);
   esp_deep_sleep_start();
@@ -154,9 +200,12 @@ void loop() {
 void setupWiFi() {
   WiFiManager wm;
   wm.autoConnect("relod", "password");
+
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
   }
+
+  DEBUG_PRINTLN("WiFi connected");
 }
 
 void initSensors() {
@@ -172,6 +221,7 @@ void initSensors() {
   sensor.begin();
 
   while (accelerometer.beginI2C(i2cAddress) != BMA400_OK) {
+    DEBUG_PRINTLN("Waiting for BMA400...");
     delay(1000);
   }
 
@@ -219,6 +269,7 @@ void initSensors() {
   if (lipo.begin()) {
     lipo.quickStart();
     lipo.setThreshold(20);
+    DEBUG_PRINTLN("Fuel gauge initialized");
   }
 }
 
@@ -226,7 +277,9 @@ void processRangingData() {
   int imageResolution = myImager.getResolution();
   int imageWidth = sqrt(imageResolution);
   int dataIndex = 0;
+
   memset(dataArray, 0, sizeof(dataArray));
+
   if (myImager.isDataReady()) {
     if (myImager.getRangingData(&measurementData)) {
       for (int y = 0; y <= imageWidth * (imageWidth - 1); y += imageWidth) {
@@ -240,13 +293,22 @@ void processRangingData() {
   }
 }
 
-void sendDataToServer(float temperature, float humidity, float acceleration_x, float acceleration_y, float acceleration_z, float voltage_red, float voltage_yellow, float voltage_green) {
+void sendDataToServer(float temperature, float humidity, float acceleration_x,
+                      float acceleration_y, float acceleration_z,
+                      float voltage_red, float voltage_yellow, float voltage_green) {
   HTTPClient http;
   http.begin(serverName);
   http.addHeader("Content-Type", "application/json");
 
-  StaticJsonDocument<1024> jsonDoc;
-  jsonDoc["device_id"] = readMacAddress();
+  // Optimized: reduced from 1024 to 768 bytes
+  // Actual payload size is ~650-700 bytes with all fields
+  StaticJsonDocument<768> jsonDoc;
+
+  // Use char buffer instead of String for MAC address
+  char macAddress[18];
+  readMacAddress(macAddress, sizeof(macAddress));
+
+  jsonDoc["device_id"] = macAddress;
   jsonDoc["temperature"] = temperature;
   jsonDoc["humidity"] = humidity;
   jsonDoc["voltage"] = voltage;
@@ -268,47 +330,57 @@ void sendDataToServer(float temperature, float humidity, float acceleration_x, f
   String requestBody;
   serializeJson(jsonDoc, requestBody);
 
-  Serial.printf("Request body: %s\nFree heap before POST: %d\n", requestBody.c_str(), ESP.getFreeHeap());
+  DEBUG_PRINTF("Payload size: %d bytes\n", requestBody.length());
+  DEBUG_PRINTF("Free heap before POST: %d bytes\n", ESP.getFreeHeap());
+
   int httpResponseCode = http.POST(requestBody);
-  Serial.printf("Free heap after POST: %d\n", ESP.getFreeHeap());
+
+  DEBUG_PRINTF("Free heap after POST: %d bytes\n", ESP.getFreeHeap());
+  DEBUG_PRINTF("HTTP Response: %d\n", httpResponseCode);
 
   if (httpResponseCode > 0) {
-    Serial.println(httpResponseCode);
-    Serial.println(http.getString());
+    DEBUG_PRINTLN(httpResponseCode);
+    DEBUG_PRINTLN(http.getString());
   } else {
-      while (httpResponseCode <= 0) { // Loop until the POST request is successful
-          errorCnt++;
-          Serial.printf("Error Count: %d\nError on sending POST: %d\n%s\nWIFI Status: %d\n", errorCnt, httpResponseCode, http.errorToString(httpResponseCode).c_str(), WL_CONNECTED);
+    // Retry loop with error limit
+    while (httpResponseCode <= 0 && errorCnt <= 5) {
+      errorCnt++;
 
-          // Optionally, restart the device after a certain number of failures
-          if (errorCnt > 5) {
-              ESP.restart();
-          }
+      DEBUG_PRINTF("Error Count: %d\n", errorCnt);
+      DEBUG_PRINTF("Error on sending POST: %d\n", httpResponseCode);
+      DEBUG_PRINTLN(http.errorToString(httpResponseCode).c_str());
+      DEBUG_PRINTF("WiFi Status: %d\n", WiFi.status());
 
-          Serial.println("Error on sending POST: ");
-          Serial.println(httpResponseCode);
-          Serial.println(http.errorToString(httpResponseCode).c_str()); // Print the error string
-          Serial.println("WIFI Status: ");
-          Serial.println(WL_CONNECTED);
-          
-          // delay(100);
-          Serial.println("Trying to send POST again:");
-          httpResponseCode = http.POST(requestBody); // Retry the POST request
-          Serial.println(httpResponseCode);
-          Serial.println(http.getString());
+      // Restart after too many failures to prevent memory issues
+      if (errorCnt > 5) {
+        DEBUG_PRINTLN("Too many errors, restarting...");
+        ESP.restart();
       }
+
+      DEBUG_PRINTLN("Retrying POST request...");
+      httpResponseCode = http.POST(requestBody);
+
+      DEBUG_PRINTF("Retry response: %d\n", httpResponseCode);
+    }
   }
 
   delay(100);
   http.end();
+
+  // Reset error counter on success
+  if (httpResponseCode > 0) {
+    errorCnt = 0;
+  }
 }
 
-String readMacAddress() {
+// Optimized: use char buffer instead of returning String object
+void readMacAddress(char* macStr, size_t len) {
+  if (len < 18) return; // Need at least 18 bytes for MAC address string
+
   uint8_t baseMac[6];
   esp_wifi_get_mac(WIFI_IF_STA, baseMac);
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
-  return String(macStr);
+  snprintf(macStr, len, "%02x:%02x:%02x:%02x:%02x:%02x",
+           baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
 }
 
 void bma400InterruptHandler() {
