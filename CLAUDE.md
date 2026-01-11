@@ -52,6 +52,10 @@ All required libraries are bundled in `libraries/`. Key ones:
 
 The repo contains older development versions (`relod_1hr_sleep_*`, `sketch_*`, etc.). These are historical iterations - all current work should be in `relod_v4_0/`.
 
+## Contributing
+
+See [AGENTS.md](AGENTS.md) for coding style, commit conventions, PR guidelines, and build/flash commands.
+
 ## Suggested Workflow
 
 This repo uses the **compound-engineering** plugin. Follow this workflow for new features or changes:
