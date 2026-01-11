@@ -51,3 +51,41 @@ All required libraries are bundled in `libraries/`. Key ones:
 ## Legacy Folders
 
 The repo contains older development versions (`relod_1hr_sleep_*`, `sketch_*`, etc.). These are historical iterations - all current work should be in `relod_v4_0/`.
+
+## Suggested Workflow
+
+This repo uses the **compound-engineering** plugin. Follow this workflow for new features or changes:
+
+### 1. Plan the work
+```
+/workflows:plan
+```
+Describe the feature or change you want to make. Claude will create a detailed plan.
+
+### 2. Review the plan (do both in parallel)
+
+When prompted, choose **"Open in editor"**. Then immediately run:
+```
+/plan_review
+```
+
+While the sub-agents review the plan, read through it yourself in the editor. This is efficient because:
+- The plan is usually good on its own
+- The agents will catch anything that needs changing
+- You get familiar with the plan before it gets enhanced with suggestions
+
+Edit or delete sections as needed based on your reading and the agent feedback.
+
+### 3. Implement the plan
+```
+/workflows:work
+```
+Claude will execute the plan step by step, creating the code.
+
+### 4. Create PR and review
+
+Once implementation is done, create a PR. Then run:
+```
+/workflows:review
+```
+This performs a thorough code review before merging.
