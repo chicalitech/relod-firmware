@@ -11,10 +11,17 @@
         "source": "git",
         "url": "https://github.com/chekos/bns-marketplace.git"
       }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
     }
   },
   "enabledPlugins": {
     "compound-engineering@every-marketplace": true,
-    "bns-dev@bns-marketplace": true
+    "bns-dev@bns-marketplace": true,
+    "clangd-lsp@claude-plugins-official": true
   }
 }
