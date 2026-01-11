@@ -1,0 +1,20 @@
+{
+  "extraKnownMarketplaces": {
+    "every-marketplace": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/EveryInc/every-marketplace.git"
+      }
+    },
+    "bns-marketplace": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/chekos/bns-marketplace.git"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "compound-engineering@every-marketplace": true,
+    "bns-dev@bns-marketplace": true
+  }
+}
