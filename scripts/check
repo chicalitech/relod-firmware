@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if command -v platformio >/dev/null 2>&1; then
+  platformio run
+  exit 0
+fi
+
+if command -v uvx >/dev/null 2>&1; then
+  uvx --from platformio platformio run
+  exit 0
+fi
+
+if command -v uv >/dev/null 2>&1; then
+  uv tool run --from platformio platformio run
+  exit 0
+fi
+
+if command -v python3 >/dev/null 2>&1; then
+  echo "platformio is required. Install with: python3 -m pip install --user platformio" >&2
+  exit 127
+fi
+
+echo "platformio is required. Install PlatformIO Core, then rerun scripts/check." >&2
+exit 127
