@@ -8,7 +8,7 @@ This repo controls firmware for deployed Relod devices. Treat it as hardware-adj
 2. `docs/measurement-payload.md`
 3. `docs/ota-safety.md`
 4. `platformio.ini`
-5. `src/main.cpp`
+5. `relod_firmware/relod_firmware.ino`
 
 ## Operating Rules
 
@@ -44,8 +44,8 @@ If `platformio` is not installed, install PlatformIO Core before attempting firm
 
 ## Current Known Constraints
 
-- The production source path is PlatformIO Arduino on `seeed_xiao_esp32c6`.
-- `src/main.cpp` currently reports firmware version `6.0`.
+- The production source path is the Arduino sketch at `relod_firmware/relod_firmware.ino`, built by PlatformIO for `seeed_xiao_esp32c6`.
+- `relod_firmware/relod_firmware.ino` currently reports firmware version `6.0`.
 - The measurement endpoint is `https://relod.fly.dev/measurement`.
 - The firmware metadata endpoint is `https://relod.fly.dev/latest_firmware`.
 - OTA still uses `WiFiClientSecure::setInsecure()` transport until certificate/CA handling is validated on device; SHA-256 verification is the required safety backstop in this repo.

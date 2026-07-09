@@ -44,16 +44,26 @@ Open a serial monitor:
 platformio device monitor -b 115200
 ```
 
+## Arduino IDE
+
+The active sketch for hardware review is:
+
+```text
+relod_firmware/relod_firmware.ino
+```
+
+Open that `.ino` in Arduino IDE if you need the sketch workflow. Select the Seeed Studio XIAO ESP32-C6 board and make the libraries in `libraries/` available to Arduino IDE before compiling.
+
 ## Project Layout
 
-- `src/main.cpp` - production firmware entrypoint.
-- `platformio.ini` - active XIAO ESP32-C6 build configuration.
+- `relod_firmware/relod_firmware.ino` - production firmware sketch and entrypoint.
+- `platformio.ini` - active XIAO ESP32-C6 build configuration; PlatformIO builds the sketch folder directly.
 - `libraries/` - vendored Arduino libraries required by the firmware.
 - `docs/measurement-payload.md` - current payload contract.
 - `docs/ota-safety.md` - OTA update guardrails.
 - `hello_world_test/` - separate toolchain smoke test for XIAO ESP32-C6.
 
-Historical sketches and old ESP-IDF files remain for archaeology only. Treat `src/main.cpp` and `platformio.ini` as the production path unless hardware owners say otherwise.
+Historical sketches and old ESP-IDF files remain for archaeology only. Treat `relod_firmware/relod_firmware.ino` and `platformio.ini` as the production path unless hardware owners say otherwise.
 
 The active partition scheme is `ota_nofs_4MB.csv`: two OTA-capable app slots and no filesystem partition. The firmware does not use SPIFFS/LittleFS, and this keeps enough room for the Arduino ESP32 3.x image while preserving OTA updates.
 
