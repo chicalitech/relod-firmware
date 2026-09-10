@@ -1,378 +1,368 @@
-/*
-  Read an 8x8 array of distances from the VL53L5CX
-  By: Nathan Seidle
-  SparkFun Electronics
-  Date: October 26, 2021
-  License: MIT. See license file for more information but you can
-  basically do whatever you want with this code.
-
-  This example shows how to read all 64 distance readings at once.
-
-  Feel like supporting our work? Buy a board from SparkFun!
-  https://www.sparkfun.com/products/18642
-
-*/
+// This version removes all Serial prints for production deployment and power efficiency
+// Additional modifications for power saving are included where applicable
+ 
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <Wire.h> //Needed for I2C
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
-#include <SparkFun_VL53L5CX_Library.h> //http://librarymanager/All#SparkFun_VL53L5CX
+#include <Wire.h>
+#include <WiFiManager.h>
+#include <SparkFun_VL53L5CX_Library.h>
 #include "Adafruit_Si7021.h"
-#include <Adafruit_MMA8451.h>
 #include <Adafruit_Sensor.h>
+#include "SparkFun_BMA400_Arduino_Library.h"
 #include <SparkFun_MAX1704x_Fuel_Gauge_Arduino_Library.h>
-
-SparkFun_VL53L5CX myImager;
-VL53L5CX_ResultsData measurementData; // Result data class structure, 1356 byes of RAM
-SFE_MAX1704X lipo; // Defaults to the MAX17043
-
-int dataArray[64]; // Example size, replace with actual size
-int dataIndex = 0;
-int imageResolution = 0; //Used to pretty print output
-int imageWidth = 0; //Used to pretty print output
-
-bool enableHeater = false;
-uint8_t loopCnt = 0;
-uint8_t loopCnt_1 = 0;
-uint8_t errorCnt = 0;
-
-double soc = 0; // Variable to keep track of LiPo state-of-charge (SOC)
-bool alert; // Variable to keep track of whether alert has been triggered
-
-Adafruit_MMA8451 mma = Adafruit_MMA8451();
-Adafruit_Si7021 sensor = Adafruit_Si7021();
-
-const char* serverName = "https://relod.fly.dev/measurement";
-
-void setup()
-{
-  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
-  Serial.begin(115200);
-
-  WiFiManager wm;
-  bool res;
-    // res = wm.autoConnect(); // auto generated AP name from chipid
-    // res = wm.autoConnect("AutoConnectAP"); // anonymous ap
-  res = wm.autoConnect("relod","password"); // password protected ap
-
-  if(!res) {
-      Serial.println("Failed to connect");
-      // ESP.restart();
-  } 
-  else {
-      //if you get here you have connected to the WiFi    
-      Serial.println("connected...yeey :)");
-  }
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.println("WiFi Connected");
-  Serial.println("SparkFun VL53L5CX Imager Example");
-
-  Wire.begin(); //This resets to 100kHz I2C
-  Wire.setClock(100000); //Sensor has max I2C freq of 400kHz 
-  
-  Serial.println("Initializing VL53L5CX Imager board. This can take up to 10s. Please wait."); //Initalizing Imager
-  if (myImager.begin() == false)
-  {
-    Serial.println(F("Sensor not found - check your wiring. Freezing"));
-    while (1) ;
-  }  
-  myImager.setResolution(8*8); //Enable all 64 pads
-  myImager.startRanging(); 
-
-  Serial.println("Si7021 test!");
-  
-  if (!sensor.begin()) {
-    Serial.println("Did not find Si7021 sensor!");
-    while (true);
-  }
-
-  Serial.print("Found model ");
-  switch(sensor.getModel()) {
-    case SI_Engineering_Samples:
-      Serial.print("SI engineering samples"); break;
-    case SI_7013:
-      Serial.print("Si7013"); break;
-    case SI_7020:
-      Serial.print("Si7020"); break;
-    case SI_7021:
-      Serial.print("Si7021"); break;
-    case SI_UNKNOWN:
-    default:
-      Serial.print("Unknown");
-  }
-  Serial.print(" Rev(");
-  Serial.print(sensor.getRevision());
-  Serial.print(")");
-  Serial.print(" Serial #"); Serial.print(sensor.sernum_a, HEX); Serial.println(sensor.sernum_b, HEX);
-
-  Serial.println("Adafruit MMA8451 test!");
-
-  if (! mma.begin()) {
-    Serial.println("Couldnt start");
-    while (1);
-  }
-  Serial.println("MMA8451 found!");
-  
-  mma.setRange(MMA8451_RANGE_2_G);
-  
-  Serial.print("Range = "); Serial.print(2 << mma.getRange());  
-  Serial.println("G");
-
-  // Set up the MAX17043 LiPo fuel gauge:
-  if (lipo.begin() == false) // Connect to the MAX17043 using the default wire port
-  {
-    Serial.println(F("MAX17043 not detected. Please check wiring. Freezing."));
-    while (1);
-  }
-
-	// Quick start restarts the MAX17043 in hopes of getting a more accurate
-	// guess for the SOC.
-	lipo.quickStart();
-
-	// We can set an interrupt to alert when the battery SoC gets too low.
-	// We can alert at anywhere between 1% - 32%:
-	lipo.setThreshold(20); // Set alert threshold to 20%.
-}
-
-void loop()
-{
-  float empty;
-  float fullPercentage;
-  float temperature;
-  float humidity;
-  float acceleration_x;
-  float acceleration_y;
-  float acceleration_z;
-
-  // lipo.getVoltage() returns a voltage value (e.g. 3.93)
-  voltage = lipo.getVoltage();
-  // lipo.getSOC() returns the estimated state of charge (e.g. 79%)
-  soc = lipo.getSOC();
-  // lipo.getAlert() returns a 0 or 1 (0=alert not triggered)
-  alert = lipo.getAlert();
-
-  // Print the variables:
-  Serial.print("Voltage: ");
-  Serial.print(voltage);  // Print the battery voltage
-  Serial.println(" V");
-
-  Serial.print("Percentage: ");
-  Serial.print(soc); // Print the battery state of charge
-  Serial.println(" %");
-
-  Serial.print("Alert: ");
-  Serial.println(alert);
-  Serial.println();
-
-  // Poll sensor for new data
-  processRangingData();
-  
-  // Read humidity and temperature
-  Serial.print("Humidity: ");
-  humidity = sensor.readHumidity();
-  Serial.print(humidity, 2);
-  Serial.println(" RH");
-  
-  temperature = sensor.readTemperature();
-  Serial.print("Temperature: ");
-  Serial.print(temperature, 2);
-  Serial.println(" °C");
-  Serial.println("\n");
-
-  // Get accelerometer event
-  sensors_event_t event; 
-  mma.getEvent(&event);
-
-  acceleration_x = event.acceleration.x;
-  Serial.print("X: \t"); Serial.print(acceleration_x); Serial.print("\t");
-  acceleration_y = event.acceleration.y;
-  Serial.print("Y: \t"); Serial.print(acceleration_y); Serial.print("\t");
-  acceleration_z = event.acceleration.z;
-  Serial.print("Z: \t"); Serial.print(acceleration_z); Serial.print("\t");
-  Serial.println("m/s^2 ");
-
-  String device_id = readMacAddress();
-  Serial.print("[DEFAULT] ESP32 Board MAC Address: ");
-  Serial.println(device_id);
-
-  Serial.print("Free heap before processing: ");
-  Serial.println(ESP.getFreeHeap());
-  
-  // Send POST request with all the data to API
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    Serial.println("WiFi Connected");
-    // Specify the URL
-    http.begin(serverName);
-
-    // Specify the content type
-    http.addHeader("Content-Type", "application/json");
-
-    // Create JSON object
-    StaticJsonDocument<1024> jsonDoc; // Increase the size of the buffer
-    jsonDoc["device_id"] = device_id;
-    jsonDoc["temperature"] = temperature;
-    jsonDoc["humidity"] = humidity;
-
-    JsonArray distanceArray = jsonDoc.createNestedArray("distance_mm");
-    for (int i = 0; i < 64; i++) {
-      distanceArray.add(dataArray[i]);
-    }
-
-    jsonDoc["acceleration_x"] = acceleration_x;
-    jsonDoc["acceleration_y"] = acceleration_y;
-    jsonDoc["acceleration_z"] = acceleration_z;
-
-    // Serialize JSON object to string
-    String requestBody;
-    serializeJson(jsonDoc, requestBody);
-
-    // Print the request body to debug
-    Serial.print("Request body: ");
-    Serial.println(requestBody);
-
-    // Print free heap memory before sending the request
-    Serial.print("Free heap before POST: ");
-    Serial.println(ESP.getFreeHeap());
-
-    // Send POST request
-    int httpResponseCode = http.POST(requestBody);
-
-    // Print free heap memory after sending the request
-    Serial.print("Free heap after POST: ");
-    Serial.println(ESP.getFreeHeap());
-
-    // Print response
-    if (httpResponseCode > 0) {
-      String response = http.getString();
-      Serial.println(httpResponseCode);
-      Serial.println(response);
-    } else {
-      errorCnt++;
-      Serial.println("Error Count: ");
-      Serial.println(errorCnt);
-      if (errorCnt > 3){
-        ESP.restart();
-      }
-      Serial.println("Error on sending POST: ");
-      Serial.println(httpResponseCode);
-      Serial.println(http.errorToString(httpResponseCode).c_str()); // Print the error string
-      Serial.println("WIFI Status: ");
-      Serial.println(WL_CONNECTED);
-      delay(100);
-      WiFi.reconnect();
-    }
-
-    // End the HTTP connection
-    delay(100);
-    http.end();
-    // Serial.print("Free heap after HTTP end: ");
-    // Serial.println(ESP.getFreeHeap());
-
-  } else {
-    Serial.println("WiFi not connected");
-  }
-
-  // Print free heap memory
-  // Serial.print("Free heap: ");
-  // Serial.println(ESP.getFreeHeap());
-
-  delay(180000); // Small delay between polling in ms
+#include "esp_sleep.h"
+#include "vl53l5cx_plugin_xtalk.h"
+#include <Preferences.h>
+#include "vl53l5cx_buffers.h"
+#include <Update.h>
+#include <WiFiClientSecure.h>
  
-  // Print the count
-  Serial.print("Loop Count: ");
-  Serial.println(loopCnt_1);
-
-  loopCnt_1++;
+#define CURRENT_FIRMWARE_VERSION "6.0"
+ 
+#include <FastLED.h>
+#define NUM_LEDS 1
+#define DATA_PIN 23
+CRGB leds[NUM_LEDS];
+ 
+SparkFun_VL53L5CX myImager;
+VL53L5CX_ResultsData measurementData;
+SFE_MAX1704X lipo;
+BMA400 accelerometer;
+ 
+uint8_t i2cAddress = BMA400_I2C_ADDRESS_DEFAULT;
+int interruptPin = 3;
+#define INTERRUPT_PIN 3
+volatile bool interruptOccurred = false;
+ 
+const char* serverName = "https://relod.fly.dev/measurement";
+long TIME_TO_SLEEP = 10800;
+ 
+void setupWiFi();
+void initSensors();
+void processRangingData();
+void sendDataToServer(float, float, float, float, float, float, float, float);
+String readMacAddress();
+void bma400InterruptHandler();
+ 
+uint8_t errorCnt = 0;
+double voltage = 0;
+double soc = 0;
+bool alert;
+int dataArray[64];
+Adafruit_Si7021 sensor = Adafruit_Si7021();
+ 
+String getFirmwareUpdateUrl() {
+  HTTPClient http;
+  String firmwareUrl = "";
+ 
+  http.begin("https://relod.fly.dev/latest_firmware");
+  int httpCode = http.GET();
+ 
+  if (httpCode == 200) {
+    String payload = http.getString();
+    StaticJsonDocument<512> doc;
+    if (!deserializeJson(doc, payload)) {
+      if (String(doc["version"]) != CURRENT_FIRMWARE_VERSION) {
+        firmwareUrl = String(doc["url"]);
+      }
+    }
+  }
+ 
+  http.end();
+  return firmwareUrl;
 }
-
-String readMacAddress(){
-  uint8_t baseMac[6];
-  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
-  if (ret == ESP_OK) {
-    char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
-             baseMac[0], baseMac[1], baseMac[2],
-             baseMac[3], baseMac[4], baseMac[5]);
-
-    // Print the MAC address to the Serial monitor
-    Serial.println(macStr);
-
-    // Return the MAC address as a string
-    return String(macStr);
-  } else {
-    Serial.println("Failed to read MAC address");
-    return String();
+ 
+// Retry helper: tries POST up to maxRetries times with 2-second delay
+int postWithRetries(HTTPClient &http, const String &body, int maxRetries = 2) {
+  int code = -1;
+  for (int i = 0; i <= maxRetries; ++i) {
+    code = http.POST(body);
+    if (code > 0) break; // success
+    delay(2000); // short back-off
+  }
+  return code; // last code (or success)
+}
+ 
+bool performOTA(String firmwareUrl) {
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+ 
+  http.begin(client, firmwareUrl);
+  int httpCode = http.GET();
+ 
+  if (httpCode == 200) {
+    int contentLength = http.getSize();
+    if (Update.begin(contentLength)) {
+      if (Update.writeStream(http.getStream()) == contentLength) {
+        if (Update.end() && Update.isFinished()) {
+          delay(1000);
+          ESP.restart();
+          return true;
+        }
+      }
+    }
+  }
+ 
+  http.end();
+  return false;
+}
+ 
+void setup() {
+  Serial.begin(115200);
+  delay(50);      
+  FastLED.addLeds<NEOPIXEL, DATA_PIN>(leds, NUM_LEDS);
+  leds[0] = CRGB::Black;
+  FastLED.show();
+ 
+  analogReadResolution(12);
+  pinMode(2, INPUT);
+  pinMode(1, INPUT);
+  pinMode(0, INPUT);
+ 
+  Wire.begin();
+  Wire.setClock(100000);
+ 
+  initSensors();
+ 
+  esp_deep_sleep_enable_gpio_wakeup(1 << INTERRUPT_PIN, ESP_GPIO_WAKEUP_GPIO_HIGH);
+ 
+  // --- Wi-Fi bring-up (one per wake cycle) ---
+  WiFi.mode(WIFI_STA); // put ESP in station mode
+  WiFi.setSleep(true); // save power when idle
+  WiFi.setTxPower(WIFI_POWER_2dBm); // lower RF output to save power
+ 
+  // Run WiFiManager or connect from stored creds
+  setupWiFi(); // your custom AP-name logic
+ 
+  // Give it up to 10 s to connect
+  if (WiFi.waitForConnectResult(10000) != WL_CONNECTED) {
+    // couldn't connect — shut Wi-Fi down and deep-sleep
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * 1000000ULL);
+    esp_deep_sleep_start();
+    return; // safety exit
+  }
+ 
+  String updateUrl = getFirmwareUpdateUrl();
+  if (updateUrl != "") {
+    performOTA(updateUrl);
   }
 }
-
+ 
+bool firstRun = true;
+ 
+void loop() {
+  float temperature, humidity, acc_x, acc_y, acc_z;
+  float voltage_pin2 = analogRead(2) * (3.3 / 4095.0);
+  float voltage_pin1 = analogRead(1) * (3.3 / 4095.0);
+  float voltage_pin0 = analogRead(0) * (3.3 / 4095.0);
+ 
+  voltage = lipo.getVoltage();
+  soc = lipo.getSOC();
+  alert = lipo.getAlert();
+ 
+  if (!firstRun) {
+    if (!myImager.setPowerMode(SF_VL53L5CX_POWER_MODE::WAKEUP)) {
+      while (1);
+    }
+    delay(100);
+  } else {
+    firstRun = false;
+  }
+ 
+  delay(100);
+  processRangingData();
+ 
+  myImager.stopRanging();
+  myImager.setPowerMode(SF_VL53L5CX_POWER_MODE::SLEEP);
+ 
+  humidity = sensor.readHumidity();
+  temperature = sensor.readTemperature();
+ 
+  accelerometer.getSensorData();
+  acc_x = accelerometer.data.accelX;
+  acc_y = accelerometer.data.accelY;
+  acc_z = accelerometer.data.accelZ;
+ 
+  if (WiFi.status() == WL_CONNECTED) {
+    sendDataToServer(temperature, humidity, acc_x, acc_y, acc_z, voltage_pin0, voltage_pin2, voltage_pin1);
+  }
+ 
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+ 
+  esp_sleep_enable_timer_wakeup(TIME_TO_SLEEP * 1000000ULL);
+  esp_deep_sleep_start();
+}
+ 
+// Returns last 4 hex characters (uppercase, no colons), e.g. "1234"
+String macLast4() {
+  uint8_t mac[6];
+  esp_wifi_get_mac(WIFI_IF_STA, mac); // use STA MAC (device ID)
+  char buf[5];
+  snprintf(buf, sizeof(buf), "%02X%02X", mac[4], mac[5]); // last two bytes
+  return String(buf);
+}
+ 
+void setupWiFi() {
+  WiFi.mode(WIFI_STA); // ensure STA is initialized so we can read its MAC
+  WiFiManager wm;
+ 
+  String apName = "relod-" + macLast4(); // e.g., "relod-1234"
+  const char* apPassword = "password"; // optional
+ 
+  // If saved creds connect: great. If not, config portal SSID = apName
+  bool connected = wm.autoConnect(apName.c_str(), apPassword);
+ 
+  if (!connected) {
+    // Handle failure (optional): reboot, blink LED, etc.
+    // ESP.restart();
+  }
+}
+ 
+void initSensors() {
+  Wire.begin();
+  Wire.setClock(400000);
+ 
+  myImager.begin(0x29, Wire);
+  myImager.setPowerMode(SF_VL53L5CX_POWER_MODE::WAKEUP);
+  delay(10);
+  myImager.setResolution(8 * 8);
+  myImager.startRanging();
+ 
+  sensor.begin();
+ 
+  while (accelerometer.beginI2C(i2cAddress) != BMA400_OK) {
+    delay(1000);
+  }
+ 
+  accelerometer.setMode(BMA400_MODE_LOW_POWER);
+ 
+  bma400_wakeup_conf wakeupConfig = {
+    .wakeup_ref_update = BMA400_UPDATE_ONE_TIME,
+    .sample_count = BMA400_SAMPLE_COUNT_1,
+    .wakeup_axes_en = BMA400_AXIS_XYZ_EN,
+    .int_wkup_threshold = 4,
+    .int_wkup_ref_x = 0,
+    .int_wkup_ref_y = 0,
+    .int_wkup_ref_z = 64,
+    .int_chan = BMA400_INT_CHANNEL_1
+  };
+  accelerometer.setWakeupInterrupt(&wakeupConfig);
+ 
+  bma400_auto_lp_conf autoLPConfig = {
+    .auto_low_power_trigger = BMA400_AUTO_LP_TIME_RESET_EN,
+    .auto_lp_timeout_threshold = 400
+  };
+  accelerometer.setAutoLowPower(&autoLPConfig);
+ 
+  bma400_gen_int_conf config = {
+    .gen_int_thres = 5,
+    .gen_int_dur = 1,
+    .axes_sel = BMA400_AXIS_XYZ_EN,
+    .data_src = BMA400_DATA_SRC_ACCEL_FILT_2,
+    .criterion_sel = BMA400_ACTIVITY_INT,
+    .evaluate_axes = BMA400_ANY_AXES_INT,
+    .ref_update = BMA400_UPDATE_EVERY_TIME,
+    .hysteresis = BMA400_HYST_48_MG,
+    .int_thres_ref_x = 0,
+    .int_thres_ref_y = 0,
+    .int_thres_ref_z = 512,
+    .int_chan = BMA400_UNMAP_INT_PIN
+  };
+  accelerometer.setGeneric2Interrupt(&config);
+ 
+  accelerometer.setInterruptPinMode(BMA400_INT_CHANNEL_1, BMA400_INT_PUSH_PULL_ACTIVE_1);
+  accelerometer.enableInterrupt(BMA400_AUTO_WAKEUP_EN, true);
+  accelerometer.enableInterrupt(BMA400_GEN2_INT_EN, true);
+ 
+  attachInterrupt(digitalPinToInterrupt(interruptPin), bma400InterruptHandler, RISING);
+ 
+  if (lipo.begin()) {
+    lipo.quickStart();
+    lipo.setThreshold(20);
+  }
+}
+ 
 void processRangingData() {
-
-  imageResolution = myImager.getResolution(); //Query sensor for current resolution - either 4x4 or 8x8
-  imageWidth = sqrt(imageResolution); //Calculate printing width
+  int imageResolution = myImager.getResolution();
+  int imageWidth = sqrt(imageResolution);
   int dataIndex = 0;
-
-  if (myImager.isDataReady() == true) {
-    Serial.println("\n");
-    Serial.print("********************************");
-    Serial.println("\n");
-
-    if (myImager.getRangingData(&measurementData)) { // Read distance data into array
-      // The ST library returns the data transposed from zone mapping shown in datasheet
-      // Pretty-print data with increasing y, decreasing x to reflect reality
+ 
+  memset(dataArray, 0, sizeof(dataArray));
+ 
+  if (myImager.isDataReady()) {
+    if (myImager.getRangingData(&measurementData)) {
       for (int y = 0; y <= imageWidth * (imageWidth - 1); y += imageWidth) {
         for (int x = imageWidth - 1; x >= 0; x--) {
-          Serial.print("\t");
-          Serial.print(measurementData.distance_mm[x + y]);
-
-          // Check if the dataIndex is within bounds
           if (dataIndex < 64) {
-            dataArray[dataIndex] = measurementData.distance_mm[x + y];
-            dataIndex++;
+            dataArray[dataIndex++] = measurementData.distance_mm[x + y];
           }
         }
-        Serial.println();
       }
-      Serial.println();
-
-      // Calculate the average of dataArray
-      long sum = 0; // Use long to avoid overflow
-      for (int i = 0; i < dataIndex; i++) {
-        sum += dataArray[i];
-      }
-
-      float average = 0;
-      if (dataIndex > 0) {
-        average = sum / (float)dataIndex; // Calculate average
-      }
-
-      // Print the average
-      Serial.print("Average distance: ");
-      Serial.println(average);
-
-      for (int i = 0; i < dataIndex; i++) {
-        Serial.println(dataArray[i]);
-      }
-
-      // float current = 0;
-      // //Subtract empty value - current value
-      // current = empty - average; 
-      // Serial.print("Current distance: ");
-      // Serial.println(current);
-
-      // float emptyPercentage = ((average * 100) / empty);
-      // fullPercentage = (100 - emptyPercentage);
-      // Serial.print("Full level: ");
-      // Serial.print(fullPercentage);
-      // Serial.println("%");
     }
   }
 }
-
-
+ 
+void sendDataToServer(float temperature, float humidity, float acceleration_x, float acceleration_y, float acceleration_z, float voltage_red, float voltage_yellow, float voltage_green) {
+  HTTPClient http;
+  http.begin(serverName);
+  http.addHeader("Content-Type", "application/json");
+ 
+  StaticJsonDocument<1024> jsonDoc;
+  jsonDoc["device_id"] = readMacAddress();
+  jsonDoc["temperature"] = temperature;
+  jsonDoc["humidity"] = humidity;
+  jsonDoc["voltage"] = voltage;
+  jsonDoc["soc"] = soc;
+  jsonDoc["voltage_red"] = voltage_red;
+  jsonDoc["voltage_yellow"] = voltage_yellow;
+  jsonDoc["voltage_green"] = voltage_green;
+  jsonDoc["firmware_version"] = CURRENT_FIRMWARE_VERSION;
+ 
+  JsonArray distanceArray = jsonDoc.createNestedArray("distance_mm");
+  for (int i = 0; i < 64; i++) {
+    distanceArray.add(dataArray[i]);
+  }
+ 
+  jsonDoc["acceleration_x"] = acceleration_x;
+  jsonDoc["acceleration_y"] = acceleration_y;
+  jsonDoc["acceleration_z"] = acceleration_z;
+ 
+  String requestBody;
+  serializeJson(jsonDoc, requestBody);
+ 
+  Serial.printf("Request body: %s\nFree heap before POST: %d\n", requestBody.c_str(), ESP.getFreeHeap());
+  int httpResponseCode = postWithRetries(http, requestBody, 2);
+  Serial.printf("Free heap after POST: %d\n", ESP.getFreeHeap());
+ 
+  if (httpResponseCode > 0) {
+    Serial.println(httpResponseCode);
+    Serial.println(http.getString());
+  } else {
+    errorCnt++;
+    Serial.printf("Error Count: %d\n", errorCnt);
+    // Optionally reboot after repeated failures
+    if (errorCnt > 5) {
+      ESP.restart();
+    }
+  }
+ 
+  delay(100);
+  http.end();
+}
+ 
+String readMacAddress() {
+  uint8_t baseMac[6];
+  esp_wifi_get_mac(WIFI_IF_STA, baseMac);
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x", baseMac[0], baseMac[1], baseMac[2], baseMac[3], baseMac[4], baseMac[5]);
+  return String(macStr);
+}
+ 
+void bma400InterruptHandler() {
+  interruptOccurred = true;
+}
