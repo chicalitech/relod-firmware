@@ -1,0 +1,19 @@
+{
+  "source": "C:\\Users\\choro\\Documents\\relod_projects\\relod_solidworks\\LidTop_v4_hole_recess_eink_small.STL",
+  "units": "assumed millimeters (STL is unitless)",
+  "bounds": [
+    12.367460250854492,
+    11.224520683288574,
+    0.0,
+    140.0801239013672,
+    138.93997192382812,
+    22.205001831054688
+  ],
+  "triangles": 3150,
+  "opening_mm": [
+    31.9,
+    55.0
+  ],
+  "inside_face_z_mm": 1.905,
+  "non_two_manifold_edges": 0
+}
