@@ -1,0 +1,117 @@
+{
+  "source": "C:\\Users\\choro\\Documents\\relod_projects\\relod_solidworks\\LidTop_v4_hole_recess_eink_small.STL",
+  "source_sha256": "a96dde9f2afda76062388a46968fead672b9c30d017f014adcc719c585369d57",
+  "product": "Adafruit 6383 / ZJY122250-0213BAAMFGN",
+  "datasheet": "https://cdn-shop.adafruit.com/product-files/4197/C13256-007_datasheet_ZJY122250-0213BAAMFGN.pdf",
+  "units": "mm (source STL interpreted in mm)",
+  "panel_mm": [
+    29.2,
+    59.2,
+    1.0
+  ],
+  "pocket_mm": [
+    29.8,
+    59.800000000000004
+  ],
+  "aperture_mm": [
+    25.3,
+    50.15
+  ],
+  "panel_center_xy": [
+    76.9204387665,
+    72.4471282959
+  ],
+  "ribbon_direction": "negative Y, bottom in inside-view preview",
+  "seat_z": 2.70500164,
+  "panel_front_z": 3.0050016399999997,
+  "stop_z": 4.50500164,
+  "retainer_thickness": 2.4,
+  "installed_front_pad_mm": 0.3,
+  "installed_rear_pad_mm": 0.5,
+  "hole_centers_xy": [
+    [
+      57.4204387665,
+      55.0721282959
+    ],
+    [
+      57.4204387665,
+      95.0721282959
+    ],
+    [
+      96.4204387665,
+      55.0721282959
+    ],
+    [
+      96.4204387665,
+      95.0721282959
+    ]
+  ],
+  "pilot_diameter_mm": 2.0,
+  "retainer_hole_diameter_mm": 2.8,
+  "validation": {
+    "max_panel_collision_mm3": 0.0,
+    "retainer_collision_mm3": -7.233796894823286e-16,
+    "removed_original_mm3": 6.687625374269743e-10,
+    "physical_fit_tested": false
+  },
+  "mesh_preprocessing": "Merged source vertices at 0.0001 mm coordinate precision for connectivity; simplified output sliver triangles with 0.0001 mm tolerance.",
+  "files": [
+    {
+      "file": "LidTop_Adafruit6383_mount_PROTOTYPE.stl",
+      "triangles": 5236,
+      "volume_mm3": 39448.46333364989,
+      "watertight": true,
+      "bodies": 1,
+      "bounds_mm": [
+        [
+          12.367460250854492,
+          11.224520683288574,
+          0.0
+        ],
+        [
+          140.0801239013672,
+          138.93997192382812,
+          22.205001831054688
+        ]
+      ]
+    },
+    {
+      "file": "Adafruit6383_rear_retainer_PROTOTYPE.stl",
+      "triangles": 1788,
+      "volume_mm3": 2065.3490038960977,
+      "watertight": true,
+      "bodies": 1,
+      "bounds_mm": [
+        [
+          -4.75,
+          0.0,
+          0.0
+        ],
+        [
+          40.650001525878906,
+          62.400001525878906,
+          2.4000000953674316
+        ]
+      ]
+    },
+    {
+      "file": "Adafruit6383_mount_fit_coupon.stl",
+      "triangles": 2184,
+      "volume_mm3": 4714.910591216617,
+      "watertight": true,
+      "bodies": 1,
+      "bounds_mm": [
+        [
+          54.170440673828125,
+          39.94712829589844,
+          0.0
+        ],
+        [
+          99.67044067382812,
+          105.94712829589844,
+          4.505001544952393
+        ]
+      ]
+    }
+  ]
+}

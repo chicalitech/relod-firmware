@@ -1,0 +1,125 @@
+{
+  "revision": 2,
+  "panel_dimension_source": "User measurements on 2026-09-09, excluding ribbon",
+  "panel_width_height_thickness_mm": [
+    36.71,
+    79.05,
+    0.95
+  ],
+  "pocket_width_height_mm": [
+    37.71,
+    80.05
+  ],
+  "clearance_each_side_mm": 0.5,
+  "original_slot_width_height_mm": [
+    31.9,
+    55.0
+  ],
+  "original_slot_preserved": true,
+  "panel_center_xy_mm": [
+    76.9204387665,
+    75.0721282959
+  ],
+  "placement_assumption": "Panel outline centered on existing slot; no active-area offset inferred from earlier product datasheet.",
+  "ribbon_exit": "short end toward negative Y / bottom in inside preview",
+  "front_cushion_installed_mm": 0.3,
+  "rear_cushion_installed_mm": 0.5,
+  "seat_z_mm": 2.70500164,
+  "panel_front_z_mm": 3.0050016399999997,
+  "retainer_stop_z_mm": 4.45500164,
+  "retainer_thickness_mm": 2.4,
+  "pilot_diameter_mm": 2.0,
+  "pilot_depth_mm": 2.55,
+  "retainer_clearance_hole_mm": 2.8,
+  "screw_centers_xy_mm": [
+    [
+      53.26543876649999,
+      45.0721282959
+    ],
+    [
+      53.26543876649999,
+      105.0721282959
+    ],
+    [
+      100.5754387665,
+      45.0721282959
+    ],
+    [
+      100.5754387665,
+      105.0721282959
+    ]
+  ],
+  "hardware": "4 M2.5 x 5 mm plastic thread-forming pan-head screws, each with 0.5 mm washer; verify pilot fit on coupon.",
+  "source_stl": "C:\\Users\\choro\\Documents\\relod_projects\\relod_solidworks\\LidTop_v4_hole_recess_eink_small.STL",
+  "source_sha256": "a96dde9f2afda76062388a46968fead672b9c30d017f014adcc719c585369d57",
+  "units": "mm; source STL interpreted in mm",
+  "mesh_preprocessing": "Merged source connectivity at 0.0001 mm precision; simplified export slivers at 0.0001 mm tolerance.",
+  "validation": {
+    "panel_collision_mm3": 0.0,
+    "panel_retainer_collision_mm3": 0.0,
+    "straight_insertion_collision_mm3": 0.0,
+    "lid_retainer_collision_mm3": -1.2943395270512137e-14,
+    "original_slot_obstruction_mm3": 0.0,
+    "original_material_removed_mm3": 4.277177570455315e-17
+  },
+  "physical_fit_tested": false,
+  "files": [
+    {
+      "file": "LidTop_measured_panel_mount_v2.stl",
+      "triangles": 4808,
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          12.367460250854492,
+          11.224520683288574,
+          0.0
+        ],
+        [
+          140.0801239013672,
+          138.93997192382812,
+          22.205001831054688
+        ]
+      ],
+      "volume_mm3": 38458.263304438
+    },
+    {
+      "file": "Rear_retainer_measured_panel_v2.stl",
+      "triangles": 1640,
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          1.4496054063783959e-06,
+          1.5258805206030956e-06,
+          -1.9105468140878656e-07
+        ],
+        [
+          53.71000289916992,
+          81.6500015258789,
+          2.3999998569488525
+        ]
+      ],
+      "volume_mm3": 2084.8416154924985
+    },
+    {
+      "file": "Mount_fit_coupon_v2.stl",
+      "triangles": 1730,
+      "watertight": true,
+      "connected_solids": 1,
+      "bounds_mm": [
+        [
+          -8.392128734158177e-07,
+          1.5631940186722204e-12,
+          0.0
+        ],
+        [
+          54.5099983215332,
+          85.25,
+          4.4550018310546875
+        ]
+      ],
+      "volume_mm3": 6856.489012721312
+    }
+  ]
+}
