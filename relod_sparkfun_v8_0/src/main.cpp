@@ -332,10 +332,10 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   display.drawFastHLine(4, 25, display.width() - 8, EPD_BLACK);
   displayText("Temp " + temp + " C", 4, 43, 146, &FreeSansBold9pt7b);
   displayText("RH " + humidity + "%", 158, 43, 88, &FreeSansBold9pt7b);
-  displayText(stateText, 4, 62, 242);
-  displayText(network, 4, 81, 242);
-  displayText(ages, 4, 87, 242, nullptr);
-  displayText("Opened " + opened, 4, 97, 242, nullptr);
+  displayText(stateText, 4, 59, 242);
+  displayText(network, 4, 77, 242);
+  displayText(ages, 4, 84, 242, nullptr);
+  displayText("Opened " + opened, 4, 93, 242, nullptr);
   displayText("Tantalizing Turkish", 4, 116, 242);
   // The installed EPD API defaults to display(false), which leaves it awake.
   display.display(true);
