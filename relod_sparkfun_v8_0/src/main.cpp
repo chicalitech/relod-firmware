@@ -12,6 +12,8 @@
 #include <SparkFun_MAX1704x_Fuel_Gauge_Arduino_Library.h>
 #include <Adafruit_Si7021.h>
 #include <Adafruit_ThinkInk.h>
+#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSansBold9pt7b.h>
 #include <Preferences.h>
 #include <Update.h>
 #include <esp_mac.h>
@@ -30,7 +32,7 @@ constexpr char kTimeZone[] = "PST8PDT,M3.2.0,M11.1.0";
 constexpr uint64_t kDayMs = 24ULL * 60 * 60 * 1000;
 constexpr uint32_t kNetworkBudgetMs = 30000;
 constexpr uint32_t kGateWaitMs = 2000;
-constexpr uint32_t kRtcMagic = 0x524C0801;
+constexpr uint32_t kRtcMagic = 0x524C0802;
 constexpr uint8_t kMinValidZones = 8;
 constexpr int kMotionPin = 3;
 #ifndef EPD_BUSY_PIN
@@ -90,6 +92,7 @@ struct Retained {
   uint8_t lidRetries;
   bool pendingLid, haveLastGood, haveOpened;
   Sample lastGood;
+  relod::ClimateCache climate;
   relod::Queue<Sample, 4> pending;
 };
 static_assert(sizeof(Retained) < 3000, "Keep the RTC queue small");
@@ -112,6 +115,7 @@ String ssidForDisplay = "Not connected";
 String deviceId;
 relod::Vector3 acceleration{NAN, NAN, NAN};
 float batterySoc = NAN, batteryVoltage = NAN;
+float currentTemperature = NAN, currentHumidity = NAN;
 uint32_t wifiConnectMs = 0;
 volatile bool timeSynced = false;
 
@@ -209,14 +213,24 @@ void readBattery() {
   if (coldBoot) battery.setThreshold(20);
 }
 
+void readClimate() {
+  // One bounded sensor attempt per ordinary wake, even with a tilted lid.
+  // The setup portal uses this same reading; no background polling is added.
+  if (!climate.begin()) return;
+  const float temperature = climate.readTemperature();
+  const float humidity = climate.readHumidity();
+  if (retained.climate.update(temperature, humidity, monotonicMs())) {
+    currentTemperature = temperature;
+    currentHumidity = humidity;
+  }
+}
+
 void finishSample(Sample& sample) {
   sample.capturedMs = monotonicMs();
   sample.sequence = ++retained.sequence;
-  sample.temperature = sample.humidity = NAN;
-  if (climate.begin()) {
-    sample.temperature = climate.readTemperature();
-    sample.humidity = climate.readHumidity();
-  }
+  // Never attach an old cached climate pair to a new POST.
+  sample.temperature = currentTemperature;
+  sample.humidity = currentHumidity;
   readBattery();
   sample.voltage = batteryVoltage;
   sample.soc = batterySoc;
@@ -257,17 +271,49 @@ uint32_t hashText(const String& text) {
   return result;
 }
 
-void renderDisplay(const String& stateText, bool portal = false) {
+String readingAge(bool valid, uint64_t capturedMs) {
+  if (!valid) return "--";
+  const uint64_t minutes = (monotonicMs() - capturedMs) / 60000;
+  if (minutes == 0) return "<1m";
+  if (minutes < 60) return String(static_cast<unsigned long>(minutes)) + "m";
+  if (minutes < 1440) return String(static_cast<unsigned long>(minutes / 60)) + "h";
+  return String(static_cast<unsigned long>(minutes / 1440)) + "d";
+}
+
+void displayText(String text, int16_t x, int16_t y, uint16_t maxWidth,
+                 const GFXfont* font = &FreeSans9pt7b) {
+  display.setFont(font);
+  display.setTextSize(1);
+  int16_t left, top;
+  uint16_t width, height;
+  display.getTextBounds(text, 0, 0, &left, &top, &width, &height);
+  if (width > maxWidth) {
+    do {
+      text.remove(text.length() - 1);
+      display.getTextBounds(text + "...", 0, 0, &left, &top, &width, &height);
+    } while (text.length() && width > maxWidth);
+    text += "...";
+  }
+  // Align the ink, including fonts with a negative left bearing.
+  display.setCursor(x - left, y);
+  display.print(text);
+}
+
+void renderDisplay(const String& stateText, const String& setupSsid = "") {
   if (monotonicMs() < retained.displayRetryMs) return;
-  const Sample& last = retained.lastGood;
-  const String temp = retained.haveLastGood && std::isfinite(last.temperature) ? String(last.temperature, 1) : "--";
-  const String humidity = retained.haveLastGood && std::isfinite(last.humidity) ? String(last.humidity, 0) : "--";
-  const float soc = std::isfinite(batterySoc) ? batterySoc : (retained.haveLastGood ? last.soc : NAN);
-  const String batteryText = std::isfinite(soc) ? String(constrain(int(soc), 0, 100)) + "%" : "--";
+  const bool portal = !setupSsid.isEmpty();
+  const auto& climateReading = retained.climate;
+  const String temp = climateReading.valid ? String(climateReading.temperature, 1) : "--";
+  const String humidity = climateReading.valid ? String(climateReading.humidity, 0) : "--";
+  const float soc = std::isfinite(batterySoc) ? batterySoc :
+      (retained.haveLastGood ? retained.lastGood.soc : NAN);
+  const String batteryText = "Battery " + (std::isfinite(soc) ? String(constrain(int(soc), 0, 100)) + "%" : "--");
   const String opened = lastOpenedText();
-  const String network = portal ? stateText : (connectedForDisplay ? ssidForDisplay : "Offline");
-  const String age = retained.haveLastGood ? String(static_cast<unsigned long>((monotonicMs() - last.capturedMs) / 60000)) + " min ago" : "None yet";
-  const uint32_t hash = hashText(stateText + network + temp + humidity + batteryText + opened + age);
+  const String network = portal ? "Join " + setupSsid :
+      (connectedForDisplay ? "Wi-Fi " + ssidForDisplay : "Wi-Fi offline");
+  const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
+      " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
+  const uint32_t hash = hashText(stateText + network + temp + humidity + batteryText + opened + ages);
   if (!coldBoot && retained.displayHash == hash) return;
   if (!displayReady) {
     SPI.begin(19, -1, 4, 5);
@@ -278,22 +324,19 @@ void renderDisplay(const String& stateText, bool portal = false) {
   display.clearBuffer();
   display.setTextWrap(false);
   display.setTextColor(EPD_BLACK);
-  display.setTextSize(2);
-  display.setCursor(6, 4);
   String suffix = deviceId.substring(deviceId.length() - 5);
   suffix.replace(":", "");
   suffix.toUpperCase();
-  display.print("RELOD-" + suffix);
-  display.setTextSize(1);
-  display.setCursor(197, 9);
-  display.print(batteryText);
-  display.drawFastHLine(6, 24, display.width() - 12, EPD_BLACK);
-  display.setCursor(6, 30); display.print(stateText.substring(0, 39));
-  display.setCursor(6, 43); display.print("Last range: " + age);
-  display.setCursor(6, 56); display.print("WiFi: " + network.substring(0, 30));
-  display.setCursor(6, 69); display.print("Temp: " + temp + " C  RH: " + humidity + "%");
-  display.setCursor(6, 82); display.print("Opened: " + opened);
-  display.setCursor(6, 104); display.print("Tantalizing Turkish");
+  displayText("RELOD-" + suffix, 4, 18, 130, &FreeSansBold9pt7b);
+  displayText(batteryText, 136, 18, 110);
+  display.drawFastHLine(4, 25, display.width() - 8, EPD_BLACK);
+  displayText("Temp " + temp + " C", 4, 43, 146, &FreeSansBold9pt7b);
+  displayText("RH " + humidity + "%", 158, 43, 88, &FreeSansBold9pt7b);
+  displayText(stateText, 4, 62, 242);
+  displayText(network, 4, 81, 242);
+  displayText(ages, 4, 87, 242, nullptr);
+  displayText("Opened " + opened, 4, 97, 242, nullptr);
+  displayText("Tantalizing Turkish", 4, 116, 242);
   // The installed EPD API defaults to display(false), which leaves it awake.
   display.display(true);
   if (display.timedOut) {
@@ -318,7 +361,7 @@ bool connectWiFi() {
   wm.setAPCallback([](WiFiManager* manager) {
     const String name = manager->getConfigPortalSSID();
     Serial.println("Setup AP: " + name + " / password: password / 192.168.4.1");
-    renderDisplay("Setup: " + name, true);
+    renderDisplay("Wi-Fi setup", name);
   });
   String suffix = deviceId;
   suffix.replace(":", "");
@@ -619,6 +662,7 @@ void setup() {
   }
   Sample sample{};
   const bool measured = horizontal && takeDistanceSample(sample);
+  readClimate();
   if (measured) {
     finishSample(sample);
     retained.lastGood = sample;
@@ -639,9 +683,9 @@ void setup() {
     ++retained.skipped;
     retained.pendingLid = true;
   }
-  const String stateText = measured ? "Lid ready - range captured" :
-      (!accelerometerReady ? "No accelerometer - range skipped" :
-       (horizontal ? "Range unavailable - will retry" : "Waiting for level, still lid"));
+  const String stateText = measured ? "Lid ready - measured" :
+      (!accelerometerReady ? "Check lid sensor" :
+       (horizontal ? "Range unavailable" : "Hold lid level and still"));
   bool updated = false;
   // Cold boot still offers setup/recovery even with a tilted or absent lid.
   if (measured || coldBoot) {

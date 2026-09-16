@@ -16,7 +16,8 @@ production XIAO sketch are unchanged. Open **this folder** with the VS Code
    an all-zero measurement. At least 8 of 64 zones must have status 5 or 9, a
    detected target, and distance in the open interval (0, 3500) mm.
 3. Stop and sleep the imager immediately, including partial failure paths.
-   Read climate and battery once for each valid range. Do not quick-start the
+   Read climate once per ordinary wake, independently of lid/range success; read
+   battery for each valid range or cold-boot recovery. Do not quick-start the
    fuel gauge on routine ESP32 wakes.
 4. Retain valid samples in a four-entry RTC-memory queue. Send at most two POST
    attempts per wake, count only 2xx as success, and retain unsuccessful samples.
@@ -201,10 +202,10 @@ the compatible `C:\pio\penv\Scripts` Core on PATH. It builds the current project
 - Host C++17 policy tests passed with warnings treated as errors: orientation,
   upside-down/invalid acceleration, stability, sensor observation gaps, clock
   wrap, retry limits, queue overflow/RTC triviality, and OTA version/hash format.
-- `sparkfun_c6` release build passed: 49,888 bytes RAM; 1,425,510 bytes app sections
+- `sparkfun_c6` release build passed: 49,896 bytes RAM; 1,431,462 bytes app sections
   out of the 6,553,600-byte OTA slot (21.8%).
-- `sparkfun_c6_debug` build passed: 49,888 bytes RAM; 1,481,080 bytes app sections
-  out of the same slot (22.6%).
+- `sparkfun_c6_debug` build passed: 49,896 bytes RAM; 1,487,480 bytes app sections
+  out of the same slot (22.7%).
 - The repository check script passed when run from the v8 folder. Its Git Bash
   invocation emitted an ESP-IDF installer MSys warning; the final native
   PowerShell builds also passed without that environment warning.
@@ -212,3 +213,27 @@ the compatible `C:\pio\penv\Scripts` Core on PATH. It builds the current project
   production sketch have no changes in this task.
 - Hardware calibration, current measurements, actual POST/OTA failure injection,
   and flashing have not been performed.
+
+## Display readability update
+
+The screen labels battery percentage explicitly and uses larger proportional
+fonts for climate, lid status, Wi-Fi, and contents. Setup reads `Wi-Fi setup`
+and `Join relod-xxxx`; the hotspot name appears once. Long network names are
+ellipsized to the panel width. The smaller detail rows retain the opened time
+and separate ages for the distance and temperature/RH readings.
+
+Temperature/RH are sampled once per normal wake before networking, even if the
+lid is tilted or distance fails. The early motion-cooldown return still skips
+sensor/display work. The most recent valid climate pair survives deep sleep;
+a failed sensor read retains that pair with its original age, or shows `--`
+if no valid pair exists. POSTs use only the current wake's climate readings,
+never the retained fallback. No extra Wi-Fi sessions, continuous sensor polling,
+or periodic screen-refresh wakeups are added.
+
+Display update validation (2026-09-16): host regression tests cover initial
+missing data, valid climate updates, NaN/infinity, humidity bounds, retention
+of the previous pair and timestamp, and RTC triviality. Release/check-script
+and debug builds passed. Pixel previews using the installed GFX font bitmaps
+checked setup, connected, stale-reading, missing-sensor, 100% battery, and long
+SSID cases against 250 x 122 bounds. Physical display appearance and the added
+climate-read energy on unqualified wakes still need checking on the assembled lid.

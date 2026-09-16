@@ -10,6 +10,22 @@ constexpr uint64_t kReportIntervalMs = 3ULL * 60 * 60 * 1000;
 constexpr uint64_t kLidRetryMs = 15000;
 constexpr uint8_t kMaxLidRetries = 6;
 
+// A coherent temperature/RH pair for the screen, independent of distance.
+// Keep old valid values on sensor failure without advancing their timestamp.
+struct ClimateCache {
+  float temperature, humidity;
+  uint64_t capturedMs;
+  bool valid;
+  bool update(float temp, float rh, uint64_t now) {
+    if (!std::isfinite(temp) || !std::isfinite(rh) || rh < 0 || rh > 100) return false;
+    temperature = temp;
+    humidity = rh;
+    capturedMs = now;
+    valid = true;
+    return true;
+  }
+};
+
 struct Vector3 { float x, y, z; };
 struct LidConfig {
   Vector3 closedGravity;

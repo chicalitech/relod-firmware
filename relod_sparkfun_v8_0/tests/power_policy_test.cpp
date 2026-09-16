@@ -7,6 +7,22 @@
 static_assert(std::is_trivial<relod::Queue<int, 4>>::value, "Queue must survive RTC wake");
 
 int main() {
+  static_assert(std::is_trivial<relod::ClimateCache>::value, "Climate cache must survive RTC wake");
+  relod::ClimateCache climate{};
+  assert(!climate.valid);
+  assert(!climate.update(NAN, 50, 100));
+  assert(!climate.valid); // Missing first reading must not appear as zero.
+  assert(climate.update(24.5f, 48, 200));
+  assert(climate.valid && climate.capturedMs == 200);
+  assert(!climate.update(25, NAN, 300));
+  assert(!climate.update(INFINITY, 50, 300));
+  assert(!climate.update(25, -1, 300));
+  assert(!climate.update(25, 101, 300));
+  assert(climate.temperature == 24.5f && climate.humidity == 48 && climate.capturedMs == 200);
+  assert(climate.update(-5, 0, 400));
+  assert(climate.update(30, 100, 500));
+  assert(climate.temperature == 30 && climate.humidity == 100 && climate.capturedMs == 500);
+
   const relod::LidConfig config{{0, 0, 1}, 12, 0.035f, 750};
   assert(relod::horizontal({0, 0, 1}, config));
   assert(!relod::horizontal({0, 0, -1}, config)); // Upside-down lid is not closed.
