@@ -51,7 +51,7 @@ constexpr int kMotionPin = 3;
 #define RELOD_DEBUG 0
 #endif
 // Calibrate this direction with the accelerometer physically mounted on the
-// closed lid. +Z is a starting assumption, not automatic calibration.
+// closed lid. platformio.ini supplies the measured reference for this assembly.
 constexpr relod::LidConfig kLidConfig{
     {LID_CLOSED_X, LID_CLOSED_Y, LID_CLOSED_Z}, 12.0f, 0.035f, 750};
 
@@ -110,6 +110,7 @@ bool accelerometerReady = false, imagerAttempted = false, imagerRunning = false;
 bool batteryReady = false, displayReady = false;
 bool coldBoot = true;
 bool connectedForDisplay = false;
+bool wifiAttemptedForDisplay = false;
 int rssiForDisplay = -127;
 String ssidForDisplay = "Not connected";
 String deviceId;
@@ -340,7 +341,8 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   const bool wifiAvailable = portal || connectedForDisplay;
   const String opened = lastOpenedText();
   const String network = portal ? "Wi-Fi setup: " + setupSsid :
-      (connectedForDisplay ? "Wi-Fi " + ssidForDisplay : "Wi-Fi offline");
+      (connectedForDisplay ? "Wi-Fi " + ssidForDisplay :
+       (wifiAttemptedForDisplay ? "Wi-Fi offline" : "Wi-Fi sleeping"));
   const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
       " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
   const uint32_t hash = hashText(stateText + network + temp + humidity + String(batteryFill) + opened + ages +
@@ -386,6 +388,7 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
 }
 
 bool connectWiFi() {
+  wifiAttemptedForDisplay = true;
   const uint32_t started = millis();
   WiFi.mode(WIFI_STA);
   WiFiManager wm;

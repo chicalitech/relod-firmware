@@ -50,9 +50,11 @@ retry a range-data failure; the screen distinguishes it from an orientation wait
 
 ## Calibrate before using inventory readings
 
-`LID_CLOSED_X/Y/Z` in `platformio.ini` defaults to **(0, 0, +1)**. This assumes
-the accelerometer's +Z axis points up with the lid closed. It is not an assertion
-about your physical installation. The BMA400 must be attached rigidly to the lid.
+`LID_CLOSED_X/Y/Z` in `platformio.ini` is calibrated to **(-0.008, -0.016, -1.037)**
+for the assembled RELOD-6514 lid, measured flat and closed on 2026-09-21. Its
+accelerometer faces -Z upward; the previous +Z reference rejected this position.
+This is specific to this mounting, not automatic calibration. Recalibrate other
+installations. The BMA400 must be attached rigidly to the lid.
 
 1. Place the assembled lid in its normal closed, horizontal position.
 2. Build `sparkfun_c6_debug` and inspect the printed `Lid acceleration` vector.
@@ -243,6 +245,9 @@ filled battery outline on the right, with no numeric percentage. A slash marks o
 Wi-Fi; setup mode combines the status and hotspot name on one line, for
 example `Wi-Fi setup: relod-6514`. This is the status
 at the last refresh, not a continuously connected radio or a live signal meter.
+`Wi-Fi sleeping` means the radio was deliberately left off on this wake;
+`Wi-Fi offline` means a connection was attempted but failed. Neither message
+means saved credentials were erased.
 Unknown battery data shows `?` inside the outline.
 
 A lightning bolt next to the battery appears when the MAX17048 reports a
