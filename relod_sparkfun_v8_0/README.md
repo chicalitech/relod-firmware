@@ -237,3 +237,9 @@ and debug builds passed. Pixel previews using the installed GFX font bitmaps
 checked setup, connected, stale-reading, missing-sensor, 100% battery, and long
 SSID cases against 250 x 122 bounds. Physical display appearance and the added
 climate-read energy on unqualified wakes still need checking on the assembled lid.
+
+The header uses white text/icons on black: device ID on the left, Wi-Fi, charge
+percentage and a filled battery outline on the right. A slash marks offline
+Wi-Fi; setup mode shows the active configuration hotspot. This is the status
+at the last refresh, not a continuously connected radio or a live signal meter.
+Unknown battery data shows `--` and an empty outline.

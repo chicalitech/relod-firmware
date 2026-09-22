@@ -299,6 +299,27 @@ void displayText(String text, int16_t x, int16_t y, uint16_t maxWidth,
   display.print(text);
 }
 
+void displayStatusIcons(bool wifiAvailable, float soc) {
+  static const uint8_t wifiIcon[] = {
+      0x00, 0x00, 0x0F, 0xF0, 0x3F, 0xFC, 0x70, 0x0E,
+      0xC0, 0x03, 0x00, 0x00, 0x07, 0xE0, 0x1F, 0xF8,
+      0x38, 0x1C, 0x00, 0x00, 0x03, 0xC0, 0x07, 0xE0,
+      0x03, 0xC0, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00};
+  display.drawBitmap(137, 6, wifiIcon, 16, 16, EPD_WHITE);
+  if (!wifiAvailable) {
+    // Clear either side of the slash so it remains legible across the arcs.
+    display.drawLine(136, 7, 152, 23, EPD_BLACK);
+    display.drawLine(138, 5, 154, 21, EPD_BLACK);
+    display.drawLine(137, 6, 153, 22, EPD_WHITE);
+  }
+  display.drawRect(220, 7, 23, 13, EPD_WHITE);
+  display.fillRect(243, 11, 3, 5, EPD_WHITE);
+  if (std::isfinite(soc)) {
+    const int fill = (constrain(int(soc), 0, 100) * 19 + 50) / 100;
+    if (fill) display.fillRect(222, 9, fill, 9, EPD_WHITE);
+  }
+}
+
 void renderDisplay(const String& stateText, const String& setupSsid = "") {
   if (monotonicMs() < retained.displayRetryMs) return;
   const bool portal = !setupSsid.isEmpty();
@@ -307,13 +328,15 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   const String humidity = climateReading.valid ? String(climateReading.humidity, 0) : "--";
   const float soc = std::isfinite(batterySoc) ? batterySoc :
       (retained.haveLastGood ? retained.lastGood.soc : NAN);
-  const String batteryText = "Battery " + (std::isfinite(soc) ? String(constrain(int(soc), 0, 100)) + "%" : "--");
+  const String batteryText = std::isfinite(soc) ? String(constrain(int(soc), 0, 100)) + "%" : "--";
+  const bool wifiAvailable = portal || connectedForDisplay;
   const String opened = lastOpenedText();
   const String network = portal ? "Join " + setupSsid :
       (connectedForDisplay ? "Wi-Fi " + ssidForDisplay : "Wi-Fi offline");
   const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
       " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
-  const uint32_t hash = hashText(stateText + network + temp + humidity + batteryText + opened + ages);
+  const uint32_t hash = hashText(stateText + network + temp + humidity + batteryText + opened + ages +
+                                 (wifiAvailable ? "wifi-on" : "wifi-off"));
   if (!coldBoot && retained.displayHash == hash) return;
   if (!displayReady) {
     SPI.begin(19, -1, 4, 5);
@@ -327,9 +350,12 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   String suffix = deviceId.substring(deviceId.length() - 5);
   suffix.replace(":", "");
   suffix.toUpperCase();
-  displayText("RELOD-" + suffix, 4, 18, 130, &FreeSansBold9pt7b);
-  displayText(batteryText, 136, 18, 110);
-  display.drawFastHLine(4, 25, display.width() - 8, EPD_BLACK);
+  display.fillRect(0, 0, display.width(), 26, EPD_BLACK);
+  display.setTextColor(EPD_WHITE);
+  displayText("RELOD-" + suffix, 6, 18, 124, &FreeSansBold9pt7b);
+  displayStatusIcons(wifiAvailable, soc);
+  displayText(batteryText, 163, 18, 53);
+  display.setTextColor(EPD_BLACK);
   displayText("Temp " + temp + " C", 4, 43, 146, &FreeSansBold9pt7b);
   displayText("RH " + humidity + "%", 158, 43, 88, &FreeSansBold9pt7b);
   displayText(stateText, 4, 59, 242);
