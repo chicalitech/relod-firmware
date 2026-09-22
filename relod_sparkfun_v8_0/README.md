@@ -17,7 +17,7 @@ production XIAO sketch are unchanged. Open **this folder** with the VS Code
    detected target, and distance in the open interval (0, 3500) mm.
 3. Stop and sleep the imager immediately, including partial failure paths.
    Read climate once per ordinary wake, independently of lid/range success; read
-   battery for each valid range or cold-boot recovery. Do not quick-start the
+   battery once per ordinary wake as well. Do not quick-start the
    fuel gauge on routine ESP32 wakes.
 4. Retain valid samples in a four-entry RTC-memory queue. Send at most two POST
    attempts per wake, count only 2xx as success, and retain unsuccessful samples.
@@ -238,8 +238,25 @@ checked setup, connected, stale-reading, missing-sensor, 100% battery, and long
 SSID cases against 250 x 122 bounds. Physical display appearance and the added
 climate-read energy on unqualified wakes still need checking on the assembled lid.
 
-The header uses white text/icons on black: device ID on the left, Wi-Fi, charge
-percentage and a filled battery outline on the right. A slash marks offline
+The header uses white text/icons on black: device ID on the left, Wi-Fi and a
+filled battery outline on the right, with no numeric percentage. A slash marks offline
 Wi-Fi; setup mode shows the active configuration hotspot. This is the status
 at the last refresh, not a continuously connected radio or a live signal meter.
-Unknown battery data shows `--` and an empty outline.
+Unknown battery data shows `?` inside the outline.
+
+A lightning bolt next to the battery appears when the MAX17048 reports a
+positive charge-rate estimate (CRATE) and the current battery reading is valid.
+The driver now explicitly selects MAX17048; its default MAX17043 mode does not
+support CRATE. Battery status is read once on each ordinary wake, including
+when distance qualification fails. No extra wakeups or polling are introduced.
+
+The bolt is an **estimate of net charging**, not direct MCP73831 charger status.
+CRATE is an averaged SOC trend and can lag or reflect voltage recovery; the
+e-ink image also persists until the next refresh. A connected charger at full
+charge may show no bolt. Errors/unknown readings do not show a bolt. For an
+immediate, authoritative charge indication, the charger's status signal would
+need an electrically suitable connection to a GPIO; no wiring is changed here.
+See the [MAX17048 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf),
+CRATE register, and [SparkFun hardware overview](https://docs.sparkfun.com/SparkFun_Thing_Plus_ESP32_C6/hardware_overview/).
+Before deployment, compare the icon against the CHG LED during charging, full
+charge, USB removal, and missing-battery/gauge cases on the actual board.

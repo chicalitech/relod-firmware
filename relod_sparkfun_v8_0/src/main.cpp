@@ -102,7 +102,7 @@ RTC_DATA_ATTR Retained retained{};
 SparkFun_VL53L5CX imager;
 VL53L5CX_ResultsData ranging;
 BMA400 accelerometer;
-SFE_MAX1704X battery;
+SFE_MAX1704X battery(MAX1704X_MAX17048);
 Adafruit_Si7021 climate;
 BatteryDisplay display;
 bool accelerometerPresent = false;
@@ -115,6 +115,7 @@ String ssidForDisplay = "Not connected";
 String deviceId;
 relod::Vector3 acceleration{NAN, NAN, NAN};
 float batterySoc = NAN, batteryVoltage = NAN;
+float batteryChangeRate = NAN;
 float currentTemperature = NAN, currentHumidity = NAN;
 uint32_t wifiConnectMs = 0;
 volatile bool timeSynced = false;
@@ -210,6 +211,7 @@ void readBattery() {
   // Preserve the fuel gauge's ongoing estimate across ESP32 sleep cycles.
   batteryVoltage = battery.getVoltage();
   batterySoc = battery.getSOC();
+  batteryChangeRate = battery.getChangeRate(); // Estimated SOC change, percent/hour.
   if (coldBoot) battery.setThreshold(20);
 }
 
@@ -231,7 +233,6 @@ void finishSample(Sample& sample) {
   // Never attach an old cached climate pair to a new POST.
   sample.temperature = currentTemperature;
   sample.humidity = currentHumidity;
-  readBattery();
   sample.voltage = batteryVoltage;
   sample.soc = batterySoc;
   sample.red = analogRead(0) * (3.3f / 4095.0f);
@@ -299,24 +300,26 @@ void displayText(String text, int16_t x, int16_t y, uint16_t maxWidth,
   display.print(text);
 }
 
-void displayStatusIcons(bool wifiAvailable, float soc) {
+void displayStatusIcons(bool wifiAvailable, int batteryFill, bool charging) {
   static const uint8_t wifiIcon[] = {
       0x00, 0x00, 0x0F, 0xF0, 0x3F, 0xFC, 0x70, 0x0E,
       0xC0, 0x03, 0x00, 0x00, 0x07, 0xE0, 0x1F, 0xF8,
       0x38, 0x1C, 0x00, 0x00, 0x03, 0xC0, 0x07, 0xE0,
       0x03, 0xC0, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00};
-  display.drawBitmap(137, 6, wifiIcon, 16, 16, EPD_WHITE);
+  display.drawBitmap(186, 6, wifiIcon, 16, 16, EPD_WHITE);
   if (!wifiAvailable) {
     // Clear either side of the slash so it remains legible across the arcs.
-    display.drawLine(136, 7, 152, 23, EPD_BLACK);
-    display.drawLine(138, 5, 154, 21, EPD_BLACK);
-    display.drawLine(137, 6, 153, 22, EPD_WHITE);
+    display.drawLine(185, 7, 201, 23, EPD_BLACK);
+    display.drawLine(187, 5, 203, 21, EPD_BLACK);
+    display.drawLine(186, 6, 202, 22, EPD_WHITE);
   }
   display.drawRect(220, 7, 23, 13, EPD_WHITE);
   display.fillRect(243, 11, 3, 5, EPD_WHITE);
-  if (std::isfinite(soc)) {
-    const int fill = (constrain(int(soc), 0, 100) * 19 + 50) / 100;
-    if (fill) display.fillRect(222, 9, fill, 9, EPD_WHITE);
+  if (batteryFill > 0) display.fillRect(222, 9, batteryFill, 9, EPD_WHITE);
+  if (batteryFill < 0) displayText("?", 228, 9, 6, nullptr);
+  if (charging) {
+    display.fillTriangle(214, 5, 208, 14, 213, 14, EPD_WHITE);
+    display.fillTriangle(211, 22, 217, 11, 212, 11, EPD_WHITE);
   }
 }
 
@@ -328,15 +331,21 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   const String humidity = climateReading.valid ? String(climateReading.humidity, 0) : "--";
   const float soc = std::isfinite(batterySoc) ? batterySoc :
       (retained.haveLastGood ? retained.lastGood.soc : NAN);
-  const String batteryText = std::isfinite(soc) ? String(constrain(int(soc), 0, 100)) + "%" : "--";
+  const int batteryFill = std::isfinite(soc) ?
+      int(constrain(soc, 0.0f, 100.0f) * 19 / 100 + 0.5f) : -1;
+  // CRATE is an averaged fuel-gauge estimate, not the charger's STAT pin.
+  // Failed/zero/negative readings never light the bolt; do not retain it.
+  const bool charging = batteryReady && std::isfinite(batteryChangeRate) &&
+      batteryChangeRate > 0 && std::isfinite(batterySoc) && batteryVoltage > 2.5f;
   const bool wifiAvailable = portal || connectedForDisplay;
   const String opened = lastOpenedText();
   const String network = portal ? "Join " + setupSsid :
       (connectedForDisplay ? "Wi-Fi " + ssidForDisplay : "Wi-Fi offline");
   const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
       " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
-  const uint32_t hash = hashText(stateText + network + temp + humidity + batteryText + opened + ages +
-                                 (wifiAvailable ? "wifi-on" : "wifi-off"));
+  const uint32_t hash = hashText(stateText + network + temp + humidity + String(batteryFill) + opened + ages +
+                                 (wifiAvailable ? "wifi-on" : "wifi-off") +
+                                 (charging ? "charging" : "not-charging"));
   if (!coldBoot && retained.displayHash == hash) return;
   if (!displayReady) {
     SPI.begin(19, -1, 4, 5);
@@ -353,8 +362,7 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   display.fillRect(0, 0, display.width(), 26, EPD_BLACK);
   display.setTextColor(EPD_WHITE);
   displayText("RELOD-" + suffix, 6, 18, 124, &FreeSansBold9pt7b);
-  displayStatusIcons(wifiAvailable, soc);
-  displayText(batteryText, 163, 18, 53);
+  displayStatusIcons(wifiAvailable, batteryFill, charging);
   display.setTextColor(EPD_BLACK);
   displayText("Temp " + temp + " C", 4, 43, 146, &FreeSansBold9pt7b);
   displayText("RH " + humidity + "%", 158, 43, 88, &FreeSansBold9pt7b);
@@ -689,6 +697,7 @@ void setup() {
   Sample sample{};
   const bool measured = horizontal && takeDistanceSample(sample);
   readClimate();
+  readBattery();
   if (measured) {
     finishSample(sample);
     retained.lastGood = sample;
@@ -715,7 +724,6 @@ void setup() {
   bool updated = false;
   // Cold boot still offers setup/recovery even with a tilted or absent lid.
   if (measured || coldBoot) {
-    if (!measured) readBattery();
     if (connectWiFi()) {
       const uint32_t networkStarted = millis();
       syncClockIfDue();
