@@ -339,7 +339,7 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
       batteryChangeRate > 0 && std::isfinite(batterySoc) && batteryVoltage > 2.5f;
   const bool wifiAvailable = portal || connectedForDisplay;
   const String opened = lastOpenedText();
-  const String network = portal ? "Join " + setupSsid :
+  const String network = portal ? "Wi-Fi setup: " + setupSsid :
       (connectedForDisplay ? "Wi-Fi " + ssidForDisplay : "Wi-Fi offline");
   const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
       " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
@@ -366,8 +366,12 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
   display.setTextColor(EPD_BLACK);
   displayText("Temp " + temp + " C", 4, 43, 146, &FreeSansBold9pt7b);
   displayText("RH " + humidity + "%", 158, 43, 88, &FreeSansBold9pt7b);
-  displayText(stateText, 4, 59, 242);
-  displayText(network, 4, 77, 242);
+  if (portal) {
+    displayText(network, 4, 68, 242);
+  } else {
+    displayText(stateText, 4, 59, 242);
+    displayText(network, 4, 77, 242);
+  }
   displayText(ages, 4, 84, 242, nullptr);
   displayText("Opened " + opened, 4, 93, 242, nullptr);
   displayText("Tantalizing Turkish", 4, 116, 242);

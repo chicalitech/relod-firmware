@@ -240,7 +240,8 @@ climate-read energy on unqualified wakes still need checking on the assembled li
 
 The header uses white text/icons on black: device ID on the left, Wi-Fi and a
 filled battery outline on the right, with no numeric percentage. A slash marks offline
-Wi-Fi; setup mode shows the active configuration hotspot. This is the status
+Wi-Fi; setup mode combines the status and hotspot name on one line, for
+example `Wi-Fi setup: relod-6514`. This is the status
 at the last refresh, not a continuously connected radio or a live signal meter.
 Unknown battery data shows `?` inside the outline.
 
