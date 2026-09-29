@@ -113,7 +113,7 @@ class PackagingTests(unittest.TestCase):
         mutations = [("schema_version", True), ("schema_version", 2), ("version", "8.0"),
                      ("source_commit", COMMIT.upper()), ("board", "xiao"),
                      ("hardware_profile", "other"), ("environment", "sparkfun_c6_debug"),
-                     ("release_notes", None)]
+                     ("release_notes", None), ("release_notes", "x" * 1025)]
         for key, value in mutations:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 validate_manifest(dict(manifest, **{key: value}))

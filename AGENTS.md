@@ -44,8 +44,9 @@ If `platformio` is not installed, install PlatformIO Core before attempting firm
 
 ## Current Known Constraints
 
-- The production source path is the Arduino sketch at `relod_firmware/relod_firmware.ino`, built by PlatformIO for `seeed_xiao_esp32c6`.
-- `relod_firmware/relod_firmware.ino` currently reports firmware version `6.0`.
+- Production SparkFun source is `relod_sparkfun_v8_0/src/main.cpp`, built with `platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6`.
+- `relod_sparkfun_v8_0/VERSION` is its version source; `docs/ota-release-runbook.md` governs releases.
+- The root XIAO build/sketch remains a testing target, not the production release pipeline.
 - The measurement endpoint is `https://relod.fly.dev/measurement`.
 - The firmware metadata endpoint is `https://relod.fly.dev/latest_firmware`.
-- OTA still uses `WiFiClientSecure::setInsecure()` transport until certificate/CA handling is validated on device; SHA-256 verification is the required safety backstop in this repo.
+- New SparkFun OTA validates CA/hostname, board/profile, newer version, size and SHA-256. Hardware validation remains mandatory before rollout. Legacy XIAO transport is unchanged.

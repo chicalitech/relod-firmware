@@ -1,4 +1,5 @@
 #include "power_policy.h"
+#include "ota_policy.h"
 #include <cassert>
 #include <cstdio>
 #include <initializer_list>
@@ -47,6 +48,17 @@ static_assert(!relod::chargerRefreshOnly(false, true, false, 100, 100, 200)); //
 static_assert(!relod::chargerRefreshOnly(true, true, false, 50, 100, 75)); // Cold-boot setup preserved.
 
 int main() {
+  // A broken lid sensor or queued failed POST must not prevent a scheduled OTA check.
+  assert(relod::otaOpportunity(100, 100, false, true, false, true, 50, 3.9f));
+  assert(relod::otaOpportunity(100, 100, true, false, false, true, 50, 3.9f));
+  assert(relod::otaOpportunity(100, 100, false, false, true, true, 30, 3.65f));
+  assert(!relod::otaOpportunity(100, 101, true, true, true, true, 50, 3.9f));
+  assert(!relod::otaOpportunity(100, 100, false, false, false, true, 50, 3.9f));
+  assert(!relod::otaOpportunity(100, 100, true, true, true, false, 50, 3.9f));
+  assert(!relod::otaOpportunity(100, 100, true, true, true, true, NAN, 3.9f));
+  assert(!relod::otaOpportunity(100, 100, true, true, true, true, 50, INFINITY));
+  assert(!relod::otaOpportunity(100, 100, true, true, true, true, 29, 3.9f));
+  assert(!relod::otaOpportunity(100, 100, true, true, true, true, 50, 3.64f));
   static_assert(std::is_trivial<relod::ClimateCache>::value, "Climate cache must survive RTC wake");
   relod::ClimateCache climate{};
   assert(!climate.valid);

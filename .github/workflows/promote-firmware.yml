@@ -1,0 +1,71 @@
+name: Promote or pause firmware
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Target channel (legacy requires a separate migration review)
+        type: choice
+        options: [test, stable]
+        required: true
+      manifest_key:
+        description: Immutable manifest key whose exact bytes were tested
+        type: string
+        required: true
+      expected_etag:
+        description: Current quoted S3 pointer ETag, or absent for first promotion
+        type: string
+        required: true
+      evidence:
+        description: Hardware evidence including tested SHA, device/profile, results, and reviewer
+        type: string
+        required: true
+      pause:
+        description: Pause the current release, retaining its version high watermark
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.repository == 'chicalitech/relod-firmware' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: ${{ inputs.channel == 'stable' && 'firmware-production' || 'firmware-test' }}
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      CHANNEL: ${{ inputs.channel }}
+      MANIFEST_KEY: ${{ inputs.manifest_key }}
+      EXPECTED_ETAG: ${{ inputs.expected_etag }}
+      EVIDENCE: ${{ inputs.evidence }}
+      PAUSE: ${{ inputs.pause }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-release.txt
+      - run: python -B -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Assume this environment's promoter role
+        uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
+        with:
+          role-to-assume: ${{ vars.FIRMWARE_PROMOTE_ROLE_ARN }}
+          aws-region: us-east-2
+          allowed-account-ids: '734846754275'
+      - name: Verify stored bytes and conditionally promote or pause
+        shell: bash
+        run: |
+          set -euo pipefail
+          pause_args=()
+          if [[ "$PAUSE" == true ]]; then pause_args=(--pause); fi
+          python -B scripts/promote_firmware.py --bucket relod-firmware-updates --channel "$CHANNEL" --manifest-key "$MANIFEST_KEY" --expected-etag "$EXPECTED_ETAG" --evidence "$EVIDENCE" "${pause_args[@]}"

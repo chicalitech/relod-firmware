@@ -49,8 +49,8 @@ def validate_manifest(data, prefix="firmware"):
         raise ValueError("binary size does not fit the production OTA slot")
     if not isinstance(binary["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", binary["sha256"]):
         raise ValueError("invalid binary SHA-256")
-    if not isinstance(data["release_notes"], str):
-        raise ValueError("release_notes must be text")
+    if not isinstance(data["release_notes"], str) or len(data["release_notes"]) > 1024:
+        raise ValueError("release_notes must be text of at most 1024 characters")
     return data
 
 

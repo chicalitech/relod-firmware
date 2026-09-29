@@ -34,6 +34,9 @@
 #include <type_traits>
 #include "power_policy.h"
 #include "release_identity.h"
+#include "ota_policy.h"
+
+extern const char otaRoots[] asm("_binary_certs_ota_roots_pem_start");
 
 // --- Configuration: firmware identity, timing limits, and GPIO wiring ---
 constexpr char kVersion[] = RELOD_FIRMWARE_VERSION;
@@ -548,6 +551,18 @@ void configureHttp(HTTPClient& http, WiFiClientSecure& client) {
   http.setReuse(false);
 }
 
+bool configureOtaHttp(HTTPClient& http, WiFiClientSecure& client) {
+  if (!validTime()) return false; // Certificate validity needs a plausible clock.
+  client.setCACert(otaRoots);
+  client.setHandshakeTimeout(5);
+  client.setTimeout(3000);
+  http.setConnectTimeout(4000);
+  http.setTimeout(3000);
+  http.setReuse(false);
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  return true;
+}
+
 String sampleBody(const Sample& sample, String& id) {
   char suffix[32];
   snprintf(suffix, sizeof(suffix), "-%08lx-%lu", static_cast<unsigned long>(retained.session),
@@ -592,11 +607,10 @@ String sampleBody(const Sample& sample, String& id) {
   return body;
 }
 
-bool sendPending(uint32_t networkStarted) {
+void sendPending(uint32_t networkStarted) {
   // Total two POST attempts per wake, including backlog. No endless flush on
   // reconnect. Original sample IDs and timestamps survive all retries.
   uint8_t attempts = 0;
-  bool sentAny = false;
   while (retained.pending.count && attempts < 2 && millis() - networkStarted < kNetworkBudgetMs - 12000) {
     String id;
     const String body = sampleBody(retained.pending.items[0], id);
@@ -616,14 +630,12 @@ bool sendPending(uint32_t networkStarted) {
                   static_cast<unsigned long>(retained.lastPostMs));
     if (relod::successfulHttp(status)) {
       retained.pending.pop();
-      sentAny = true;
     } else {
       if (!relod::retryableHttp(status) || attempts == 2 || status == 429) break;
       if (millis() - networkStarted >= kNetworkBudgetMs - 12250) break;
       delay(250);
     }
   }
-  return sentAny;
 }
 
 // --- OTA: bounded downloads, board/version checks, and SHA-256 verification ---
@@ -648,13 +660,14 @@ bool readSmallBody(HTTPClient& http, String& body) {
   return false;
 }
 
-bool installVerifiedFirmware(const String& url, const String& expectedHash) {
+bool installVerifiedFirmware(const String& url, const String& expectedHash, uint32_t expectedSize) {
   WiFiClientSecure client;
   HTTPClient http;
-  configureHttp(http, client);
+  if (!configureOtaHttp(http, client)) return false;
   if (!http.begin(client, url) || http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   const int length = http.getSize();
-  if (length <= 0 || static_cast<uint32_t>(length) > ESP.getFreeSketchSpace() || !Update.begin(length)) {
+  if (length <= 0 || static_cast<uint32_t>(length) != expectedSize ||
+      expectedSize > ESP.getFreeSketchSpace() || !Update.begin(length)) {
     http.end();
     return false;
   }
@@ -691,24 +704,31 @@ bool installVerifiedFirmware(const String& url, const String& expectedHash) {
   return ok;
 }
 
-// Report queued samples first. Check updates at most daily, with sufficient battery.
-bool checkFirmwareIfDue() {
-  if (monotonicMs() < retained.otaDueMs || retained.pending.count ||
-      !batteryReady || !std::isfinite(batterySoc) || !std::isfinite(batteryVoltage) ||
-      batterySoc < 30 || batteryVoltage < 3.65f) return false;
-  retained.otaDueMs = monotonicMs() + kDayMs; // Failed checks cannot repeat on each motion wake.
+// Caller reserves the daily opportunity before attempting Wi-Fi, including failures.
+bool checkFirmware() {
   WiFiClientSecure client;
   HTTPClient http;
-  configureHttp(http, client);
+  if (!configureOtaHttp(http, client)) return false;
   http.useHTTP10(true);
-  if (!http.begin(client, kMetadataUrl) || http.GET() != HTTP_CODE_OK) { http.end(); return false; }
+  String mac = deviceId;
+  mac.replace(":", "");
+  mac.toLowerCase();
+  const String request = String(kMetadataUrl) + "?ota_protocol=2&device_id=" + mac +
+      "&board=sparkfun_esp32c6_thing_plus&hardware_profile=" + RELOD_HARDWARE_PROFILE +
+      "&version=" + kVersion;
+  if (!http.begin(client, request) || http.GET() != HTTP_CODE_OK) { http.end(); return false; }
   String body;
   const bool read = readSmallBody(http, body);
   http.end();
   JsonDocument doc;
   if (!read || deserializeJson(doc, body)) return false;
   const String board = doc["board"] | "";
-  if (board != "sparkfun_esp32c6_thing_plus") return false;
+  const String profile = doc["hardware_profile"] | "";
+  if (board != "sparkfun_esp32c6_thing_plus" || profile != RELOD_HARDWARE_PROFILE ||
+      !doc["rollout_enabled"].is<bool>() || !doc["rollout_enabled"].as<bool>() ||
+      !doc["size"].is<uint32_t>()) return false;
+  const uint32_t size = doc["size"].as<uint32_t>();
+  if (!size || size > ESP.getFreeSketchSpace()) return false;
   const String version = doc["version"] | "";
   const String url = doc["url"] | "";
   String hash = doc["sha256"] | "";
@@ -716,7 +736,7 @@ bool checkFirmwareIfDue() {
   if (!relod::newerVersion(version.c_str(), kVersion) || !url.startsWith("https://") ||
       !relod::sha256Hex(hash.c_str())) return false;
   Serial.println("Downloading newer firmware with SHA-256 verification.");
-  return installVerifiedFirmware(url, hash);
+  return installVerifiedFirmware(url, hash, size);
 }
 
 // --- Sleep preparation: put peripherals to sleep and arm motion/charger wake sources ---
@@ -884,7 +904,8 @@ void setup() {
   }
   // 3c. Normal cycle: qualify the lid and take a distance sample only when stable.
   retained.nextMotionMs = actionNow + 30000; // Bound repeated motion even when the lid never qualifies.
-  if (actionNow >= retained.reportDueMs) {
+  const bool scheduledReportDue = actionNow >= retained.reportDueMs;
+  if (scheduledReportDue) {
     retained.reportDueMs = actionNow + relod::kReportIntervalMs;
     retained.lidRetries = 0;
   }
@@ -922,14 +943,17 @@ void setup() {
        (horizontal ? "Range unavailable" : "Hold lid level and still"));
   // 4. Send eligible measurements, then consider OTA within the remaining budget.
   bool updated = false;
+  const bool otaDue = relod::otaOpportunity(monotonicMs(), retained.otaDueMs,
+      coldBoot, scheduledReportDue, measured, batteryReady, batterySoc, batteryVoltage);
+  if (otaDue) retained.otaDueMs = monotonicMs() + kDayMs;
   // Cold boot still offers setup/recovery even with a tilted or absent lid.
-  if (measured || coldBoot) {
+  if (measured || coldBoot || otaDue) {
     if (connectWiFi()) {
       const uint32_t networkStarted = millis();
       syncClockIfDue();
-      const bool sent = sendPending(networkStarted);
+      sendPending(networkStarted);
       // OTA is separate from the reporting budget and capped at 120 s streaming.
-      if (sent && millis() - networkStarted < kNetworkBudgetMs - 12000) updated = checkFirmwareIfDue();
+      if (otaDue) updated = checkFirmware();
     }
   }
   // 5. Save the opening time, refresh the screen, and schedule the next wake.
