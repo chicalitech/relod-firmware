@@ -6,6 +6,46 @@
 
 static_assert(std::is_trivial<relod::Queue<int, 4>>::value, "Queue must survive RTC wake");
 
+// Compile-time checks run even with the ESP32 cross-compiler: no device needed.
+constexpr bool openingEventsPreserveBriefTilts() {
+  relod::LidEvents events{};
+  if (events.observe(true, true)) return false; // Booting tilted is not an opening.
+  events.confirmClosed();
+  if (events.observe(false, true)) return false; // Bad reads / non-gravity ignored.
+  if (events.observe(true, false)) return false; // Flat is not an opening.
+  if (!events.observe(true, true)) return false; // First observed tilt is retained.
+  if (events.observe(true, false)) return false; // Briefly flat does not re-arm.
+  if (events.observe(true, true)) return false; // One event while still open.
+  auto afterSleep = events;
+  if (afterSleep.observe(true, true)) return false; // RTC state survives follow-up.
+  afterSleep.confirmClosed(); // Re-arm only after the stable-lid gate passes.
+  return afterSleep.observe(true, true);
+}
+static_assert(std::is_trivial<relod::LidEvents>::value, "Opening state must survive RTC wake");
+static_assert(openingEventsPreserveBriefTilts(), "Brief opening must survive later flat samples and timer follow-ups");
+
+static_assert(relod::chargerState(0, 0) == relod::ChargerState::Unplugged);
+static_assert(relod::chargerState(174, 3500) == relod::ChargerState::Charging);
+static_assert(relod::chargerState(3500, 1047) == relod::ChargerState::Full);
+static_assert(relod::chargerState(174, 3100) == relod::ChargerState::Charging); // ADC high may clip.
+static_assert(relod::chargerState(3300, 3300) == relod::ChargerState::Unknown);
+static_assert(relod::chargerState(1800, 1047) == relod::ChargerState::Unknown);
+static_assert(relod::chargerWakeLevel(174) == 1);
+static_assert(relod::chargerWakeLevel(3500) == 0);
+static_assert(relod::chargerWakeLevel(1047) == -1); // Never depend on ambiguous digital LOW.
+static_assert(relod::chargerRetryMs(0) == 10000);
+static_assert(relod::chargerRetryMs(4) == 160000);
+static_assert(relod::chargerRetryMs(5) == 300000);
+static_assert(relod::chargerRetryMs(255) == 300000);
+static_assert(relod::sleepUntilMs(50, 100) == 50);
+static_assert(relod::sleepUntilMs(100, 100) == 1);
+static_assert(relod::sleepUntilMs(101, 100) == 1); // No unsigned underflow after slow refresh.
+static_assert(relod::chargerRefreshOnly(false, true, false, 50, 100, 75));
+static_assert(!relod::chargerRefreshOnly(false, true, true, 50, 100, 75)); // Motion still handled.
+static_assert(!relod::chargerRefreshOnly(false, true, false, 75, 100, 75)); // Lid retry due.
+static_assert(!relod::chargerRefreshOnly(false, true, false, 100, 100, 200)); // Report due.
+static_assert(!relod::chargerRefreshOnly(true, true, false, 50, 100, 75)); // Cold-boot setup preserved.
+
 int main() {
   static_assert(std::is_trivial<relod::ClimateCache>::value, "Climate cache must survive RTC wake");
   relod::ClimateCache climate{};

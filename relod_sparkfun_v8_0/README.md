@@ -33,7 +33,7 @@ production XIAO sketch are unchanged. Open **this folder** with the VS Code
    line is inactive. A timer always remains as a fallback.
 
 The three-hour scheduled-report interval remains. A failed lid/range check gets
-up to six timer-only follow-ups, 15 seconds apart. This avoids both a long awake
+up to six follow-ups, 15 seconds apart, with motion wake disabled (charger wake remains available). This avoids both a long awake
 wait and repeated GPIO wake storms. If the lid stays open beyond that window,
 the next opportunity is a later motion wake or the next scheduled report. A
 persistently asserted/faulty interrupt leaves timer wake as the recovery path;
@@ -250,19 +250,91 @@ at the last refresh, not a continuously connected radio or a live signal meter.
 means saved credentials were erased.
 Unknown battery data shows `?` inside the outline.
 
-A lightning bolt next to the battery appears when the MAX17048 reports a
-positive charge-rate estimate (CRATE) and the current battery reading is valid.
-The driver now explicitly selects MAX17048; its default MAX17043 mode does not
-support CRATE. Battery status is read once on each ordinary wake, including
-when distance qualification fails. No extra wakeups or polling are introduced.
+### Charger-triggered display updates
 
-The bolt is an **estimate of net charging**, not direct MCP73831 charger status.
-CRATE is an averaged SOC trend and can lag or reflect voltage recovery; the
-e-ink image also persists until the next refresh. A connected charger at full
-charge may show no bolt. Errors/unknown readings do not show a bolt. For an
-immediate, authoritative charge indication, the charger's status signal would
-need an electrically suitable connection to a GPIO; no wiring is changed here.
-See the [MAX17048 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/max17048-max17049.pdf),
-CRATE register, and [SparkFun hardware overview](https://docs.sparkfun.com/SparkFun_Thing_Plus_ESP32_C6/hardware_overview/).
-Before deployment, compare the icon against the CHG LED during charging, full
-charge, USB removal, and missing-battery/gauge cases on the actual board.
+The lightning bolt now follows the external MCP73833 charger status rather
+than the MAX17048 charge-rate estimate. J3 yellow/STAT1 is connected to GPIO2,
+green/STAT2 to GPIO1, and red/PG to GPIO0. These measured voltages were taken
+relative to ground with the GPIO wires connected:
+
+| Cable / charger state | Yellow | Green | Header |
+| --- | --- | --- | --- |
+| Unplugged | approximately 0 V | approximately 0 V | Battery level, no bolt |
+| Charging | 0.174 V | 3.5 V | Battery level and bolt |
+| Charge complete | 3.5 V | 1.047 V | Full battery, no bolt |
+
+Detection averages calibrated ADC samples and requires three matching states
+50 ms apart. Values outside these combinations are treated as unknown, with
+no charging bolt. Classification thresholds are specific to this assembly:
+low <=350 mV, high >=2600 mV, and green-on <=1500 mV when yellow is high.
+
+ESP32-C6 EXT1 wake levels are selected separately for each status pin. A pin
+below 600 mV watches for HIGH; a pin at or above 2600 mV watches for LOW.
+Intermediate voltages are excluded. Thus, at full charge only yellow is armed;
+the measured 1.047 V green signal is not treated as a reliable digital level.
+GPIO3 retains motion wake detection. No internal pull-up is enabled on the
+charger pins. Red/PG is not needed to distinguish these measured states.
+
+A charger-only wake reads the gauge, refreshes changed display content, and
+returns to sleep without starting Wi-Fi, POST, OTA, distance, or climate reads.
+The last measurement and network snapshot remain visible. Existing report and
+lid-retry deadlines are preserved; a simultaneous motion event or due report
+uses the normal path. Charge completion also triggers an update. E-ink refresh
+latency still applies, and cable changes during blocking provisioning/network
+work are reflected when that work reaches its next display update.
+
+Transitions during a refresh get a short follow-up. Ambiguous inputs, failed
+wake arming, or repeated rapid wakes use bounded retries, backing off from
+10 seconds to at most five minutes; unchanged content does not refresh the
+panel. Charger wakes remain available during lid-retry sleeps, even when
+motion wakes are temporarily disabled. Display-fault backoff still applies.
+The existing LED-voltage POST fields and schema are unchanged.
+
+The board currently has direct status-to-GPIO wiring. These thresholds are a
+functional interpretation of the supplied measurements, not electrical
+protection or proof of voltage limits in every power state. See the
+[MCP73833 datasheet](https://ww1.microchip.com/downloads/aemDocuments/documents/APID/ProductDocuments/DataSheets/MCP73833-4-Stand-Alone-Linear-Li-Ion-Li-Polymer-Charge-Management-Controller-DS20002005.pdf)
+and [ESP32-C6 datasheet](https://documentation.espressif.com/esp32-c6_datasheet_en.html).
+
+Before wider rollout, flash this assembly and verify charging, charge complete,
+unplugging from both states, and a simultaneous lid lift. Confirm the wake log
+shows the expected state and that ordinary charger events do not send POSTs.
+Check sleep current with and without the cable; hardware validation is pending.
+Compile-time assertions cover the supplied voltage combinations, ambiguous green
+wake exclusion, retry limits, expired deadlines, and motion/report priority.
+The `sparkfun_c6` release build passed via `scripts/check`.
+
+
+### Measurement and opening timestamps
+
+The screen labels these separate events explicitly:
+- `Last measured: YYYY-MM-DD HH:MM` is the latest valid distance sample in the
+  configured local timezone, not the server upload time. An unsuccessful
+  lid/range check keeps the previous sample time. Before a valid sample it says
+  `Not yet`; before clock synchronization it shows the sample age with `no clock`.
+- `Lid opened: YYYY-MM-DD HH:MM` is the last recorded opening event. Its saved
+  value can survive flashing and need not match the measurement date.
+
+These rows replace the former Range/T-RH age and Opened rows. Temperature and
+humidity still show the latest valid cached climate pair, collected separately
+from distance. The timestamps are snapshots at refresh, not live clocks.
+
+
+### Lid-opening event tracking
+
+A confirmed stable, closed orientation arms opening detection. The first valid
+observed tilt records one opening immediately, before range qualification ends.
+Returning to a stable closed position arms the next event. Timer follow-ups and
+range failures do not suppress this tracking, and a motion wake during the
+30-second reporting cooldown takes one acceleration reading to retain an opening.
+Opening-event tracking adds no wakeups, Wi-Fi connections, or changes to the report schedule.
+With a valid clock, opening time is persisted even when Wi-Fi is skipped.
+
+An opening entirely between sensor observations can still be missed, and motion
+wake must function through BMA400 INT1 to GPIO3. A horizontal lift is not detectable
+as a tilt; this remains an orientation estimate, not a mechanical closure sensor.
+The serial `Lid event` and `Lid cooldown` lines expose wake cause and saved opening
+time for hardware verification. `sparkfun_c6_debug` adds startup time to attach USB.
+After flashing, let the lid qualify closed, then lift/tilt it and return it flat.
+Verify a new timestamp, no repeated events while held tilted, and another event
+on a second opening. Hardware confirmation of this change is still required.

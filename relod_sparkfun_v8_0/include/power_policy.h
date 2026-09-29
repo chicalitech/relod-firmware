@@ -10,6 +10,31 @@ constexpr uint64_t kReportIntervalMs = 3ULL * 60 * 60 * 1000;
 constexpr uint64_t kLidRetryMs = 15000;
 constexpr uint8_t kMaxLidRetries = 6;
 
+// Calibrated to the measured MCP73833 LED-status signals on RELOD-6514.
+enum class ChargerState : uint8_t { Unknown, Unplugged, Charging, Full };
+constexpr ChargerState chargerState(uint32_t yellowMv, uint32_t greenMv) {
+  if (yellowMv <= 350 && greenMv <= 350) return ChargerState::Unplugged;
+  if (yellowMv <= 350 && greenMv >= 2600) return ChargerState::Charging;
+  if (yellowMv >= 2600 && greenMv <= 1500) return ChargerState::Full;
+  return ChargerState::Unknown; // Unmeasured, transitional, or fault combination.
+}
+// Wake on the opposite level, only for signals clearly at a digital rail.
+// In particular, the measured 1047 mV green-on level is never a wake source.
+constexpr int chargerWakeLevel(uint32_t mv) {
+  return mv <= 600 ? 1 : (mv >= 2600 ? 0 : -1);
+}
+// Failed/ambiguous inputs get progressively less frequent checks (10 s to 5 min).
+constexpr uint64_t chargerRetryMs(uint8_t attempts) {
+  return attempts >= 5 ? 300000ULL : (10000ULL << attempts);
+}
+constexpr uint64_t sleepUntilMs(uint64_t now, uint64_t deadline) {
+  return deadline > now ? deadline - now : 1;
+}
+constexpr bool chargerRefreshOnly(bool cold, bool chargerEvent, bool motionEvent,
+                                  uint64_t now, uint64_t reportDue, uint64_t scheduledWake) {
+  return !cold && chargerEvent && !motionEvent && now < reportDue && now < scheduledWake;
+}
+
 // A coherent temperature/RH pair for the screen, independent of distance.
 // Keep old valid values on sensor failure without advancing their timestamp.
 struct ClimateCache {
@@ -45,6 +70,19 @@ inline bool horizontal(Vector3 value, const LidConfig& config) {
                        (magnitude * refMagnitude);
   return cosine >= std::cos(config.maxTiltDegrees * 0.01745329252f);
 }
+
+// Track an observed opening separately from range success and retry scheduling.
+// Zero-initialized RTC state requires a confirmed closed position first.
+struct LidEvents {
+  bool closedSeen;
+  bool openingActive;
+  constexpr void confirmClosed() { closedSeen = true; openingActive = false; }
+  constexpr bool observe(bool validGravity, bool tilted) {
+    if (!validGravity || !tilted || !closedSeen || openingActive) return false;
+    openingActive = true;
+    return true;
+  }
+};
 
 // Stability is relative to the start of the window, not just the last sample:
 // a slowly tilting lid must not pass because each individual step was small.

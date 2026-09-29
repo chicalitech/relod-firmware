@@ -1,4 +1,12 @@
 // Relod v8: qualify lid orientation before ranging, report briefly, then sleep.
+//
+// Wake-cycle overview (setup() is the main workflow; loop() is normally unused):
+//   Charger change -> update battery/display -> resume the existing sleep deadline.
+//   Lid motion / timer / reset -> qualify lid -> measure if stable -> report -> sleep.
+//   A reset also permits Wi-Fi setup; ordinary sleep wakes never open the portal.
+//
+// power_policy.h holds the lid qualification, charger thresholds, retry timing,
+// and queue rules. platformio.ini holds board selection and lid calibration.
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -19,12 +27,14 @@
 #include <esp_mac.h>
 #include <esp_rtc_time.h>
 #include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include <esp_sntp.h>
 #include <mbedtls/sha256.h>
 #include <time.h>
 #include <type_traits>
 #include "power_policy.h"
 
+// --- Configuration: firmware identity, timing limits, and GPIO wiring ---
 constexpr char kVersion[] = "8.0.0";
 constexpr char kMeasurementUrl[] = "https://relod.fly.dev/measurement";
 constexpr char kMetadataUrl[] = "https://relod.fly.dev/latest_firmware";
@@ -32,9 +42,12 @@ constexpr char kTimeZone[] = "PST8PDT,M3.2.0,M11.1.0";
 constexpr uint64_t kDayMs = 24ULL * 60 * 60 * 1000;
 constexpr uint32_t kNetworkBudgetMs = 30000;
 constexpr uint32_t kGateWaitMs = 2000;
-constexpr uint32_t kRtcMagic = 0x524C0802;
+constexpr uint32_t kRtcMagic = 0x524C0804;
 constexpr uint8_t kMinValidZones = 8;
 constexpr int kMotionPin = 3;
+constexpr int kChargerYellowPin = 2;
+constexpr int kChargerGreenPin = 1;
+constexpr uint64_t kChargerMask = (1ULL << kChargerYellowPin) | (1ULL << kChargerGreenPin);
 #ifndef EPD_BUSY_PIN
 #define EPD_BUSY_PIN 18
 #endif
@@ -55,6 +68,7 @@ constexpr int kMotionPin = 3;
 constexpr relod::LidConfig kLidConfig{
     {LID_CLOSED_X, LID_CLOSED_Y, LID_CLOSED_Z}, 12.0f, 0.035f, 750};
 
+// --- Display driver: keep a disconnected or stuck panel from blocking sleep ---
 // The installed driver has an unbounded BUSY loop. Bound it without patching
 // a downloaded library; later waits in this wake return immediately on fault.
 class BatteryDisplay : public ThinkInk_213_Grayscale4_MFGN {
@@ -72,6 +86,8 @@ class BatteryDisplay : public ThinkInk_213_Grayscale4_MFGN {
   }
 };
 
+// --- State: queued measurements and data retained through deep sleep ---
+// Each Sample is a snapshot; retrying a POST must not replace its original values.
 struct Sample {
   uint64_t capturedMs;
   uint32_t sequence;
@@ -81,6 +97,8 @@ struct Sample {
   int16_t distance[64];
   uint8_t validZones;
 };
+// RTC memory survives deep sleep, but is reset on cold boot or layout changes.
+// Increment kRtcMagic whenever this layout changes to reject incompatible data.
 struct Retained {
   uint32_t magic, session, sequence;
   uint64_t reportDueMs, otaDueMs, timeSyncDueMs, nextMotionMs;
@@ -93,12 +111,20 @@ struct Retained {
   bool pendingLid, haveLastGood, haveOpened;
   Sample lastGood;
   relod::ClimateCache climate;
+  relod::LidEvents lidEvents;
+  uint64_t scheduledWakeMs, chargerWakeWindowMs;
+  uint8_t chargerWakeCount, chargerRetryCount;
+  bool resumeMotion, chargerRetryWake;
+  relod::ChargerState displayedCharger;
+  char displayState[32], displaySsid[33];
+  bool displayConnected, displayWifiAttempted;
   relod::Queue<Sample, 4> pending;
 };
 static_assert(sizeof(Retained) < 3000, "Keep the RTC queue small");
 static_assert(std::is_trivial<Retained>::value, "RTC state must not reinitialize on wake");
 RTC_DATA_ATTR Retained retained{};
 
+// --- Per-wake objects and scratch data (recreated after every deep-sleep wake) ---
 SparkFun_VL53L5CX imager;
 VL53L5CX_ResultsData ranging;
 BMA400 accelerometer;
@@ -116,17 +142,30 @@ String ssidForDisplay = "Not connected";
 String deviceId;
 relod::Vector3 acceleration{NAN, NAN, NAN};
 float batterySoc = NAN, batteryVoltage = NAN;
-float batteryChangeRate = NAN;
+struct ChargerReading {
+  uint32_t yellowMv = 0, greenMv = 0;
+  relod::ChargerState state = relod::ChargerState::Unknown;
+} charger;
 float currentTemperature = NAN, currentHumidity = NAN;
 uint32_t wifiConnectMs = 0;
 volatile bool timeSynced = false;
 
+// Scheduling uses the RTC counter across sleep; human-readable dates use wall time.
 uint64_t monotonicMs() { return esp_rtc_get_time_us() / 1000; }
 bool validTime() { return time(nullptr) >= 1704067200; }
 
+// --- Lid qualification: remember openings, then require level and still before ranging ---
 bool readAcceleration() {
   if (!accelerometerReady || accelerometer.getSensorData() != BMA400_OK) return false;
   acceleration = {accelerometer.data.accelX, accelerometer.data.accelY, accelerometer.data.accelZ};
+  const float magnitude = std::sqrt(acceleration.x * acceleration.x +
+      acceleration.y * acceleration.y + acceleration.z * acceleration.z);
+  const bool validGravity = std::isfinite(magnitude) && magnitude >= 0.90f && magnitude <= 1.10f;
+  if (retained.lidEvents.observe(validGravity, !relod::horizontal(acceleration, kLidConfig))) {
+    retained.lastOpenedMs = monotonicMs();
+    retained.haveOpened = true;
+    Serial.println("Lid opening detected: closed-to-tilted transition.");
+  }
   return true;
 }
 
@@ -135,7 +174,10 @@ bool waitForStableLid(relod::LidGate& gate) {
   const uint32_t started = millis();
   do {
     const bool ok = readAcceleration();
-    if (gate.observe(acceleration, millis(), ok)) return true;
+    if (gate.observe(acceleration, millis(), ok)) {
+      retained.lidEvents.confirmClosed();
+      return true;
+    }
     delay(50); // BMA400 runs at 100 Hz while qualifying the lid.
   } while (millis() - started < kGateWaitMs);
   return false;
@@ -155,6 +197,7 @@ void initAccelerometer() {
   }
 }
 
+// --- Distance sensor: wake only for qualified measurements, then explicitly sleep ---
 // Every range attempt, including partial initialization failures, is cleaned up
 // before any network activity. ESP32 deep sleep does not turn off sensor rails.
 void sleepImager() {
@@ -206,13 +249,44 @@ bool takeDistanceSample(Sample& sample) {
   return ok;
 }
 
+// --- Charger, battery, and climate readings ---
+const char* chargerStateText(relod::ChargerState state) {
+  switch (state) {
+    case relod::ChargerState::Unplugged: return "unplugged";
+    case relod::ChargerState::Charging: return "charging";
+    case relod::ChargerState::Full: return "full";
+    default: return "unknown";
+  }
+}
+
+// Classify the yellow/green pair rather than treating every low voltage as charging.
+// Average ADC noise, then require three matching states before trusting a transition.
+void readCharger() {
+  auto previous = relod::ChargerState::Unknown;
+  uint8_t matching = 0;
+  for (uint8_t sample = 0; sample < 8; ++sample) {
+    uint32_t yellow = 0, green = 0;
+    for (uint8_t average = 0; average < 4; ++average) {
+      yellow += analogReadMilliVolts(kChargerYellowPin);
+      green += analogReadMilliVolts(kChargerGreenPin);
+    }
+    charger.yellowMv = yellow / 4;
+    charger.greenMv = green / 4;
+    const auto state = relod::chargerState(charger.yellowMv, charger.greenMv);
+    matching = state == previous ? matching + 1 : 1;
+    previous = state;
+    if (matching >= 3) { charger.state = state; return; }
+    delay(50);
+  }
+  charger.state = relod::ChargerState::Unknown;
+}
+
 void readBattery() {
   batteryReady = battery.begin();
   if (!batteryReady) return;
   // Preserve the fuel gauge's ongoing estimate across ESP32 sleep cycles.
   batteryVoltage = battery.getVoltage();
   batterySoc = battery.getSOC();
-  batteryChangeRate = battery.getChangeRate(); // Estimated SOC change, percent/hour.
   if (coldBoot) battery.setThreshold(20);
 }
 
@@ -228,6 +302,7 @@ void readClimate() {
   }
 }
 
+// Freeze telemetry and assign a sequence number before the sample enters the queue.
 void finishSample(Sample& sample) {
   sample.capturedMs = monotonicMs();
   sample.sequence = ++retained.sequence;
@@ -241,6 +316,7 @@ void finishSample(Sample& sample) {
   sample.green = analogRead(1) * (3.3f / 4095.0f);
 }
 
+// --- Event timestamps: opening and measurement times describe different events ---
 String lastOpenedText() {
   if (retained.haveOpened && validTime()) {
     const time_t opened = time(nullptr) - (monotonicMs() - retained.lastOpenedMs) / 1000;
@@ -257,6 +333,7 @@ String lastOpenedText() {
   return retained.haveOpened ? "Time unavailable" : result;
 }
 
+// Save only changed opening times to flash; this also works when Wi-Fi is skipped.
 void persistOpenedTime() {
   if (!retained.haveOpened || !validTime()) return;
   const String opened = lastOpenedText();
@@ -267,6 +344,7 @@ void persistOpenedTime() {
   }
 }
 
+// --- E-ink rendering: compose the screen and skip refreshes when content is unchanged ---
 uint32_t hashText(const String& text) {
   uint32_t result = 2166136261UL;
   for (size_t i = 0; i < text.length(); ++i) result = (result ^ uint8_t(text[i])) * 16777619UL;
@@ -280,6 +358,18 @@ String readingAge(bool valid, uint64_t capturedMs) {
   if (minutes < 60) return String(static_cast<unsigned long>(minutes)) + "m";
   if (minutes < 1440) return String(static_cast<unsigned long>(minutes / 60)) + "h";
   return String(static_cast<unsigned long>(minutes / 1440)) + "d";
+}
+
+// Local time of the latest valid distance sample, independent of lid opening.
+String lastMeasuredText() {
+  if (!retained.haveLastGood) return "Not yet";
+  if (!validTime()) return readingAge(true, retained.lastGood.capturedMs) + " ago (no clock)";
+  const time_t measured = time(nullptr) - (monotonicMs() - retained.lastGood.capturedMs) / 1000;
+  struct tm local;
+  localtime_r(&measured, &local);
+  char text[20];
+  strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &local);
+  return String(text);
 }
 
 void displayText(String text, int16_t x, int16_t y, uint16_t maxWidth,
@@ -326,29 +416,35 @@ void displayStatusIcons(bool wifiAvailable, int batteryFill, bool charging) {
 
 void renderDisplay(const String& stateText, const String& setupSsid = "") {
   if (monotonicMs() < retained.displayRetryMs) return;
+  readCharger();
   const bool portal = !setupSsid.isEmpty();
+  if (!portal) {
+    stateText.toCharArray(retained.displayState, sizeof(retained.displayState));
+    ssidForDisplay.toCharArray(retained.displaySsid, sizeof(retained.displaySsid));
+    retained.displayConnected = connectedForDisplay;
+    retained.displayWifiAttempted = wifiAttemptedForDisplay;
+  }
   const auto& climateReading = retained.climate;
   const String temp = climateReading.valid ? String(climateReading.temperature, 1) : "--";
   const String humidity = climateReading.valid ? String(climateReading.humidity, 0) : "--";
   const float soc = std::isfinite(batterySoc) ? batterySoc :
       (retained.haveLastGood ? retained.lastGood.soc : NAN);
-  const int batteryFill = std::isfinite(soc) ?
-      int(constrain(soc, 0.0f, 100.0f) * 19 / 100 + 0.5f) : -1;
-  // CRATE is an averaged fuel-gauge estimate, not the charger's STAT pin.
-  // Failed/zero/negative readings never light the bolt; do not retain it.
-  const bool charging = batteryReady && std::isfinite(batteryChangeRate) &&
-      batteryChangeRate > 0 && std::isfinite(batterySoc) && batteryVoltage > 2.5f;
+  const int batteryFill = charger.state == relod::ChargerState::Full ? 19 :
+      (std::isfinite(soc) ? int(constrain(soc, 0.0f, 100.0f) * 19 / 100 + 0.5f) : -1);
+  const bool charging = charger.state == relod::ChargerState::Charging;
   const bool wifiAvailable = portal || connectedForDisplay;
   const String opened = lastOpenedText();
   const String network = portal ? "Wi-Fi setup: " + setupSsid :
       (connectedForDisplay ? "Wi-Fi " + ssidForDisplay :
        (wifiAttemptedForDisplay ? "Wi-Fi offline" : "Wi-Fi sleeping"));
-  const String ages = "Range " + readingAge(retained.haveLastGood, retained.lastGood.capturedMs) +
-      " | T/RH " + readingAge(climateReading.valid, climateReading.capturedMs) + (climateReading.valid ? " ago" : "");
-  const uint32_t hash = hashText(stateText + network + temp + humidity + String(batteryFill) + opened + ages +
+  const String measured = lastMeasuredText();
+  const uint32_t hash = hashText(stateText + network + temp + humidity + String(batteryFill) + opened + measured +
                                  (wifiAvailable ? "wifi-on" : "wifi-off") +
                                  (charging ? "charging" : "not-charging"));
-  if (!coldBoot && retained.displayHash == hash) return;
+  if (!coldBoot && retained.displayHash == hash) {
+    retained.displayedCharger = charger.state;
+    return;
+  }
   if (!displayReady) {
     SPI.begin(19, -1, 4, 5);
     display.begin(THINKINK_MONO);
@@ -374,8 +470,8 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
     displayText(stateText, 4, 59, 242);
     displayText(network, 4, 77, 242);
   }
-  displayText(ages, 4, 84, 242, nullptr);
-  displayText("Opened " + opened, 4, 93, 242, nullptr);
+  displayText("Last measured: " + measured, 4, 84, 242, nullptr);
+  displayText("Lid opened: " + opened, 4, 93, 242, nullptr);
   displayText("Tantalizing Turkish", 4, 116, 242);
   // The installed EPD API defaults to display(false), which leaves it awake.
   display.display(true);
@@ -384,9 +480,11 @@ void renderDisplay(const String& stateText, const String& setupSsid = "") {
     Serial.println("E-ink BUSY timeout; display disabled for 24 h or until reset.");
   } else {
     retained.displayHash = hash;
+    retained.displayedCharger = charger.state;
   }
 }
 
+// --- Networking: bounded connection attempts, saved credentials, and clock sync ---
 bool connectWiFi() {
   wifiAttemptedForDisplay = true;
   const uint32_t started = millis();
@@ -437,6 +535,7 @@ void syncClockIfDue() {
   if (timeSynced) retained.timeSyncDueMs = monotonicMs() + kDayMs;
 }
 
+// --- Reporting: preserve sample identity and keep failed uploads queued for later ---
 void configureHttp(HTTPClient& http, WiFiClientSecure& client) {
   // Preserves v7's transport policy. Validating server certificates is a
   // separate deployment prerequisite; SHA-256 is not server authentication.
@@ -469,7 +568,7 @@ String sampleBody(const Sample& sample, String& id) {
   JsonArray grid = doc["distance_mm"].to<JsonArray>();
   for (const auto value : sample.distance) grid.add(value);
   const uint64_t age = (monotonicMs() - sample.capturedMs) / 1000;
-  doc["schema_version"] = 2;
+  doc["schema_version"] = "2";
   doc["measurement_id"] = id;
   doc["measurement_sequence"] = sample.sequence;
   doc["measurement_age_s"] = age;
@@ -526,6 +625,7 @@ bool sendPending(uint32_t networkStarted) {
   return sentAny;
 }
 
+// --- OTA: bounded downloads, board/version checks, and SHA-256 verification ---
 bool readSmallBody(HTTPClient& http, String& body) {
   const int length = http.getSize();
   // HTTP/1.0 metadata request supplies a length or close-delimited body.
@@ -590,6 +690,7 @@ bool installVerifiedFirmware(const String& url, const String& expectedHash) {
   return ok;
 }
 
+// Report queued samples first. Check updates at most daily, with sufficient battery.
 bool checkFirmwareIfDue() {
   if (monotonicMs() < retained.otaDueMs || retained.pending.count ||
       !batteryReady || !std::isfinite(batterySoc) || !std::isfinite(batteryVoltage) ||
@@ -617,6 +718,7 @@ bool checkFirmwareIfDue() {
   return installVerifiedFirmware(url, hash);
 }
 
+// --- Sleep preparation: put peripherals to sleep and arm motion/charger wake sources ---
 bool armMotionWake() {
   if (!accelerometerReady) {
     if (accelerometerPresent) accelerometer.setMode(BMA400_MODE_LOW_POWER);
@@ -639,25 +741,71 @@ bool armMotionWake() {
   return ok && digitalRead(kMotionPin) == LOW;
 }
 
-void enterSleep(uint64_t sleepMs, bool allowMotion) {
+// EXT1 supports a separate wake level for each pin: watch for the opposite level.
+// Ignore intermediate voltages, especially the measured 1.047 V green-on signal.
+bool armChargerPin(int pin, uint32_t mv) {
+  const int level = relod::chargerWakeLevel(mv);
+  if (level < 0) return false;
+  pinMode(pin, INPUT); // No pull-up into the USB-powered LED/status circuitry.
+  if (digitalRead(pin) == level) return false; // Changed since ADC sample: retry by timer.
+  return esp_sleep_enable_ext1_wakeup_io(1ULL << pin,
+      level ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ANY_LOW) == ESP_OK;
+}
+
+// Charger-only wakes pass an absolute deadline so display work cannot restart the
+// report or lid-retry countdown. Fault/noise retries may wake sooner, never later.
+void enterSleep(uint64_t sleepMs, bool allowMotion, uint64_t deadlineMs = 0) {
+  const uint64_t deadline = deadlineMs ? deadlineMs : monotonicMs() + sleepMs;
   sleepImager();
   stopWiFi();
   const bool motionReady = armMotionWake();
+  esp_sleep_disable_ext1_wakeup_io(0);
+  bool motionArmed = false;
   if (allowMotion && motionReady) {
-    const auto error = esp_deep_sleep_enable_gpio_wakeup(1ULL << kMotionPin, ESP_GPIO_WAKEUP_GPIO_HIGH);
-    if (error != ESP_OK) Serial.printf("Motion wake configuration failed: %d\n", error);
+    motionArmed = esp_sleep_enable_ext1_wakeup_io(1ULL << kMotionPin, ESP_EXT1_WAKEUP_ANY_HIGH) == ESP_OK;
   }
-  // Follow-up waits deliberately use timer-only wake to coalesce motion storms.
-  esp_sleep_enable_timer_wakeup(sleepMs * 1000ULL);
+  readCharger(); // Catch a plug/unplug that happened during the e-ink refresh.
+  const uint64_t now = monotonicMs();
+  if (now - retained.chargerWakeWindowMs >= 10000) {
+    retained.chargerWakeWindowMs = now;
+    retained.chargerWakeCount = 0;
+  }
+  const bool backoff = retained.chargerWakeCount >= 4;
+  const bool yellowArmed = !backoff && armChargerPin(kChargerYellowPin, charger.yellowMv);
+  const bool greenArmed = !backoff && armChargerPin(kChargerGreenPin, charger.greenMv);
+  const bool expectedYellow = relod::chargerWakeLevel(charger.yellowMv) >= 0;
+  const bool expectedGreen = relod::chargerWakeLevel(charger.greenMv) >= 0;
+  const bool retry = backoff || charger.state == relod::ChargerState::Unknown ||
+      (expectedYellow && !yellowArmed) || (expectedGreen && !greenArmed);
+  const bool missedRefresh = now >= retained.displayRetryMs &&
+      charger.state != retained.displayedCharger;
+  const uint64_t remaining = relod::sleepUntilMs(now, deadline);
+  uint64_t timerMs = remaining;
+  if (retry) {
+    timerMs = min(timerMs, relod::chargerRetryMs(retained.chargerRetryCount));
+    if (retained.chargerRetryCount < 5) ++retained.chargerRetryCount;
+  } else {
+    retained.chargerRetryCount = 0;
+    if (missedRefresh) timerMs = min(timerMs, uint64_t(1000));
+  }
+  retained.scheduledWakeMs = deadline; // Charger wakes cannot postpone report / lid-retry deadlines.
+  retained.resumeMotion = allowMotion;
+  retained.chargerRetryWake = timerMs < remaining;
+  esp_sleep_enable_timer_wakeup(timerMs * 1000ULL);
   retained.lastAwakeMs = millis();
+  Serial.printf("Charger: %s, yellow=%lu mV, green=%lu mV, wake=%s\n",
+      chargerStateText(charger.state), static_cast<unsigned long>(charger.yellowMv),
+      static_cast<unsigned long>(charger.greenMv), yellowArmed || greenArmed ? "on" : "off");
   Serial.printf("Sleep %lu s, motion=%s, pending=%u, awake=%lu ms\n",
-                static_cast<unsigned long>(sleepMs / 1000), allowMotion && motionReady ? "on" : "off",
+                static_cast<unsigned long>(timerMs / 1000), motionArmed ? "on" : "off",
                 retained.pending.count, static_cast<unsigned long>(retained.lastAwakeMs));
   Serial.flush();
   esp_deep_sleep_start();
 }
 
+// --- Main wake cycle: restore state, choose work, then return to deep sleep ---
 void setup() {
+  // 1. Restore retained state and initialize the interfaces needed on this wake.
   Serial.begin(115200);
   if (RELOD_DEBUG) delay(1500);
   coldBoot = esp_reset_reason() != ESP_RST_DEEPSLEEP;
@@ -680,27 +828,69 @@ void setup() {
   Wire.begin();
   Wire.setClock(400000);
   Wire.setTimeOut(50);
+  // 2. Identify the wake source before reconfiguring the sensor or wake pins.
+  const auto wakeCause = esp_sleep_get_wakeup_cause();
+  const uint64_t wakePins = wakeCause == ESP_SLEEP_WAKEUP_EXT1 ? esp_sleep_get_ext1_wakeup_status() : 0;
+  for (const int pin : {kMotionPin, kChargerYellowPin, kChargerGreenPin}) {
+    rtc_gpio_deinit(static_cast<gpio_num_t>(pin));
+  }
   pinMode(kMotionPin, INPUT_PULLDOWN);
+  pinMode(kChargerYellowPin, INPUT);
+  pinMode(kChargerGreenPin, INPUT);
+  analogSetPinAttenuation(kChargerYellowPin, ADC_11db);
+  analogSetPinAttenuation(kChargerGreenPin, ADC_11db);
+  // Preserve an interrupt arriving just after a charger wake, before sensor reconfiguration.
+  const bool motionPending = !coldBoot && retained.resumeMotion && digitalRead(kMotionPin) == HIGH;
   initAccelerometer();
-  const bool motionWake = esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO;
-  if (motionWake && now < retained.nextMotionMs) {
-    enterSleep(retained.nextMotionMs - now, false);
+  const bool motionWake = motionPending || (wakePins & (1ULL << kMotionPin)) ||
+      wakeCause == ESP_SLEEP_WAKEUP_GPIO;
+  const bool chargerWake = (wakePins & kChargerMask) ||
+      (wakeCause == ESP_SLEEP_WAKEUP_TIMER && retained.chargerRetryWake);
+  readCharger();
+  if (chargerWake && retained.chargerWakeCount < 255) ++retained.chargerWakeCount;
+  const uint64_t actionNow = monotonicMs(); // ADC/sensor startup may cross a report deadline.
+  // 3a. Charger-only shortcut: update the header using the last measurement snapshot.
+  if (relod::chargerRefreshOnly(coldBoot, chargerWake, motionWake, actionNow,
+                               retained.reportDueMs, retained.scheduledWakeMs)) {
+    // Preserve the previous measurement and network snapshot. No ToF, climate, POST, or OTA.
+    readBattery();
+    connectedForDisplay = retained.displayConnected;
+    wifiAttemptedForDisplay = retained.displayWifiAttempted;
+    ssidForDisplay = retained.displaySsid;
+    const String previousState = retained.displayState[0] ? retained.displayState : "Waiting for lid check";
+    renderDisplay(previousState);
+    const uint64_t deadline = min(retained.scheduledWakeMs, retained.reportDueMs);
+    enterSleep(1, retained.resumeMotion, deadline);
     return;
   }
-  retained.nextMotionMs = now + 30000; // Bound repeated motion even when the lid never qualifies.
-  if (now >= retained.reportDueMs) {
-    retained.reportDueMs = now + relod::kReportIntervalMs;
+  // 3b. During motion cooldown, remember an opening without starting another report.
+  if (motionWake && actionNow < retained.nextMotionMs && actionNow < retained.reportDueMs) {
+    // Retain an observed opening even when reporting is suppressed by cooldown.
+    readAcceleration();
+    persistOpenedTime();
+    if (chargerWake) {
+      readBattery();
+      connectedForDisplay = retained.displayConnected;
+      wifiAttemptedForDisplay = retained.displayWifiAttempted;
+      ssidForDisplay = retained.displaySsid;
+      const String previousState = retained.displayState[0] ? retained.displayState : "Waiting for lid check";
+      renderDisplay(previousState);
+    }
+    Serial.printf("Lid cooldown: wake=%d, opened=%s\n", esp_sleep_get_wakeup_cause(), lastOpenedText().c_str());
+    enterSleep(1, false, min(retained.nextMotionMs, retained.reportDueMs));
+    return;
+  }
+  // 3c. Normal cycle: qualify the lid and take a distance sample only when stable.
+  retained.nextMotionMs = actionNow + 30000; // Bound repeated motion even when the lid never qualifies.
+  if (actionNow >= retained.reportDueMs) {
+    retained.reportDueMs = actionNow + relod::kReportIntervalMs;
     retained.lidRetries = 0;
   }
   relod::LidGate gate(kLidConfig);
   const bool horizontal = accelerometerReady && waitForStableLid(gate);
   Serial.printf("Lid acceleration: %.3f %.3f %.3f g; stable=%s\n", acceleration.x,
                 acceleration.y, acceleration.z, horizontal ? "yes" : "no");
-  if (!horizontal && motionWake && !retained.pendingLid && readAcceleration() &&
-      !relod::horizontal(acceleration, kLidConfig)) {
-    retained.lastOpenedMs = now;
-    retained.haveOpened = true;
-  }
+  Serial.printf("Lid event: wake=%d, opened=%s\n", esp_sleep_get_wakeup_cause(), lastOpenedText().c_str());
   Sample sample{};
   const bool measured = horizontal && takeDistanceSample(sample);
   readClimate();
@@ -728,6 +918,7 @@ void setup() {
   const String stateText = measured ? "Lid ready - measured" :
       (!accelerometerReady ? "Check lid sensor" :
        (horizontal ? "Range unavailable" : "Hold lid level and still"));
+  // 4. Send eligible measurements, then consider OTA within the remaining budget.
   bool updated = false;
   // Cold boot still offers setup/recovery even with a tilted or absent lid.
   if (measured || coldBoot) {
@@ -735,12 +926,13 @@ void setup() {
       const uint32_t networkStarted = millis();
       syncClockIfDue();
       const bool sent = sendPending(networkStarted);
-      persistOpenedTime();
       // OTA is separate from the reporting budget and capped at 120 s streaming.
       if (sent && millis() - networkStarted < kNetworkBudgetMs - 12000) updated = checkFirmwareIfDue();
     }
   }
+  // 5. Save the opening time, refresh the screen, and schedule the next wake.
   stopWiFi(); // Display refresh does not need the radio.
+  persistOpenedTime(); // Record openings with a valid clock even when Wi-Fi is skipped.
   renderDisplay(stateText);
   if (updated) {
     // Sensors and display have already been put to sleep before rebooting.
