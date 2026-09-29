@@ -16,6 +16,10 @@
    1024 characters). This builds once, stores its
    GitHub artifact, and uploads those exact bytes to private S3. It changes no
    device channel. A version cannot be reused for different bytes or commits.
+   If only publication fails, use **Re-run failed jobs**: the publish job downloads
+   the successful build job's saved artifact and never rebuilds. Do not rerun the
+   entire workflow to replace a reserved version; a rebuild may produce different
+   bytes. Keep the artifact (90-day retention) until publication is verified.
 4. Download that workflow's `candidate-<commit>` artifact. Test its `firmware.bin`
    over USB on the matching SparkFun hardware. Record its manifest SHA, device,
    mounting/calibration profile, results and reviewer. Do not rebuild for testing.

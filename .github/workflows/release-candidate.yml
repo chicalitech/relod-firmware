@@ -21,18 +21,15 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish:
+  build:
     if: github.repository == 'chicalitech/relod-firmware' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    environment: firmware-candidates
-    permissions:
-      contents: read
-      id-token: write
+    outputs:
+      artifact_name: candidate-${{ steps.source.outputs.commit }}
     env:
       PYTHONDONTWRITEBYTECODE: '1'
       RELEASE_REF: ${{ inputs.release_ref }}
       RELEASE_NOTES: ${{ inputs.release_notes }}
-      AWS_REGION: us-east-2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -40,6 +37,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Resolve approved release source
+        id: source
         shell: bash
         run: |
           set -euo pipefail
@@ -54,6 +52,7 @@ jobs:
           git merge-base --is-ancestor "$commit" refs/remotes/origin/main
           git checkout --detach "$commit"
           echo "RELEASE_COMMIT=$commit" >> "$GITHUB_ENV"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
@@ -80,6 +79,28 @@ jobs:
           path: build/release/
           if-no-files-found: error
           retention-days: 90
+  publish:
+    needs: build
+    if: github.repository == 'chicalitech/relod-firmware' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: firmware-candidates
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install -r requirements-release.txt
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: build/release
       - name: Assume candidate publisher role
         uses: aws-actions/configure-aws-credentials@ff717079ee2060e4bcee96c4779b553acc87447c # v4
         with:

@@ -168,6 +168,18 @@ class ReleaseTests(unittest.TestCase):
             self.promote("stable")
         self.assertNotIn(channel_key("stable"), self.s3.objects)
 
+    def test_publish_retry_reuses_build_artifact_without_build_credentials(self):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    ".github/workflows/release-candidate.yml").read_text()
+        build, publish = workflow.split("\n  publish:\n", 1)
+        self.assertIn("actions/upload-artifact@", build)
+        self.assertNotIn("id-token: write", build)
+        self.assertIn("needs: build", publish)
+        self.assertIn("actions/download-artifact@", publish)
+        self.assertIn("needs.build.outputs.artifact_name", publish)
+        self.assertNotIn("platformio", publish)
+        self.assertNotIn("package_firmware.py", publish)
+
     def test_stale_and_racing_update_never_report_success(self):
         self.publish()
         current = self.promote()
