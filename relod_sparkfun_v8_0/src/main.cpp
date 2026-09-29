@@ -33,9 +33,10 @@
 #include <time.h>
 #include <type_traits>
 #include "power_policy.h"
+#include "release_identity.h"
 
 // --- Configuration: firmware identity, timing limits, and GPIO wiring ---
-constexpr char kVersion[] = "8.0.0";
+constexpr char kVersion[] = RELOD_FIRMWARE_VERSION;
 constexpr char kMeasurementUrl[] = "https://relod.fly.dev/measurement";
 constexpr char kMetadataUrl[] = "https://relod.fly.dev/latest_firmware";
 constexpr char kTimeZone[] = "PST8PDT,M3.2.0,M11.1.0";
@@ -824,6 +825,7 @@ void setup() {
   snprintf(macText, sizeof(macText), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   deviceId = macText;
   Serial.printf("Relod %s, wake=%d\n", kVersion, esp_sleep_get_wakeup_cause());
+  Serial.println(relod::kReleaseIdentity);
   analogReadResolution(12);
   Wire.begin();
   Wire.setClock(400000);
