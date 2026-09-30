@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 if command -v platformio >/dev/null 2>&1; then
-  platformio run
+  platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6
   exit 0
 fi
 
 if command -v uvx >/dev/null 2>&1; then
-  uvx --from platformio platformio run
+  uvx --from platformio==6.1.19 platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6
   exit 0
 fi
 
 if command -v uv >/dev/null 2>&1; then
-  uv tool run --from platformio platformio run
+  uv tool run --from platformio==6.1.19 platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6
   exit 0
 fi
 

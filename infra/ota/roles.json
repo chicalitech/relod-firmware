@@ -1,0 +1,363 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Relod OTA GitHub OIDC roles; existing bucket and public access settings unchanged",
+  "Resources": {
+    "GitHubOidc": {
+      "Type": "AWS::IAM::OIDCProvider",
+      "Properties": {
+        "Url": "https://token.actions.githubusercontent.com",
+        "ClientIdList": [
+          "sts.amazonaws.com"
+        ]
+      }
+    },
+    "ApiReadPolicy": {
+      "Type": "AWS::IAM::ManagedPolicy",
+      "Properties": {
+        "Description": "Read-only Fly OTA selector; attach to a dedicated runtime identity",
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:GetObject"
+              ],
+              "Resource": [
+                "arn:aws:s3:::relod-firmware-updates/firmware/releases/*",
+                "arn:aws:s3:::relod-firmware-updates/firmware/channels/*",
+                "arn:aws:s3:::relod-firmware-updates/firmware/devices/*"
+              ]
+            },
+            {
+              "Effect": "Allow",
+              "Action": [
+                "s3:ListBucket"
+              ],
+              "Resource": [
+                "arn:aws:s3:::relod-firmware-updates"
+              ],
+              "Condition": {
+                "StringLike": {
+                  "s3:prefix": [
+                    "firmware/*"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "CandidateRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Ref": "GitHubOidc"
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:chicalitech/relod-firmware:environment:firmware-candidates"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ScopedFirmwareAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/releases/sparkfun_esp32c6_thing_plus/relod-6514-v1/*",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/versions/sparkfun_esp32c6_thing_plus/relod-6514-v1/*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/releases/sparkfun_esp32c6_thing_plus/relod-6514-v1/*",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/versions/sparkfun_esp32c6_thing_plus/relod-6514-v1/*"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*",
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "TestRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Ref": "GitHubOidc"
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:chicalitech/relod-firmware:environment:firmware-test"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ScopedFirmwareAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/releases/sparkfun_esp32c6_thing_plus/relod-6514-v1/*",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/test.json",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/test.json",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/audits/sparkfun_esp32c6_thing_plus/relod-6514-v1/test/*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/audits/sparkfun_esp32c6_thing_plus/relod-6514-v1/test/*"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*",
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/test.json"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*",
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/test.json"
+                  ],
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    },
+                    "StringEquals": {
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ProductionRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "MaxSessionDuration": 3600,
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": {
+                  "Ref": "GitHubOidc"
+                }
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                  "token.actions.githubusercontent.com:sub": "repo:chicalitech/relod-firmware:environment:firmware-production"
+                }
+              }
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "ScopedFirmwareAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/releases/sparkfun_esp32c6_thing_plus/relod-6514-v1/*",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/stable.json",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/test.json",
+                    "arn:aws:s3:::relod-firmware-updates/firmware/audits/sparkfun_esp32c6_thing_plus/relod-6514-v1/stable/*"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates"
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/audits/sparkfun_esp32c6_thing_plus/relod-6514-v1/stable/*"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*",
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/stable.json"
+                  ],
+                  "Condition": {
+                    "StringEquals": {
+                      "s3:if-none-match": "*",
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:PutObject"
+                  ],
+                  "Resource": [
+                    "arn:aws:s3:::relod-firmware-updates/firmware/channels/sparkfun_esp32c6_thing_plus/relod-6514-v1/stable.json"
+                  ],
+                  "Condition": {
+                    "Null": {
+                      "s3:if-match": "false"
+                    },
+                    "StringEquals": {
+                      "s3:x-amz-server-side-encryption": "AES256"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "Outputs": {
+    "ApiReadPolicyArn": {
+      "Value": {
+        "Ref": "ApiReadPolicy"
+      }
+    },
+    "CandidateRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "CandidateRole",
+          "Arn"
+        ]
+      }
+    },
+    "TestRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "TestRole",
+          "Arn"
+        ]
+      }
+    },
+    "ProductionRoleArn": {
+      "Value": {
+        "Fn::GetAtt": [
+          "ProductionRole",
+          "Arn"
+        ]
+      }
+    }
+  }
+}

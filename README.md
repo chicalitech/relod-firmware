@@ -2,7 +2,7 @@
 
 Production firmware for deployed Relod inventory containers.
 
-The active target is `seeed_xiao_esp32c6` with Arduino through PlatformIO. The firmware samples:
+Production uses the SparkFun ESP32-C6 Thing Plus in `relod_sparkfun_v8_0/`, with Arduino through PlatformIO. XIAO remains a testing target. The firmware samples:
 
 - VL53L5CX 8x8 time-of-flight distance grid
 - Si7021 temperature and humidity
@@ -29,24 +29,24 @@ scripts/check
 Build only:
 
 ```sh
-platformio run
+platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6
 ```
 
-Upload to a connected XIAO ESP32-C6:
+Upload to a connected SparkFun ESP32-C6 Thing Plus:
 
 ```sh
-platformio run --target upload
+platformio run -d relod_sparkfun_v8_0 -e sparkfun_c6 --target upload
 ```
 
 Open a serial monitor:
 
 ```sh
-platformio device monitor -b 115200
+platformio device monitor -d relod_sparkfun_v8_0 -b 115200
 ```
 
 ## Arduino IDE
 
-The active sketch for hardware review is:
+The separate XIAO testing sketch is:
 
 ```text
 relod_firmware/relod_firmware.ino
@@ -56,16 +56,19 @@ Open that `.ino` in Arduino IDE if you need the sketch workflow. Select the Seee
 
 ## Project Layout
 
-- `relod_firmware/relod_firmware.ino` - production firmware sketch and entrypoint.
-- `platformio.ini` - active XIAO ESP32-C6 build configuration; PlatformIO builds the sketch folder directly.
+- `relod_sparkfun_v8_0/src/main.cpp` - production SparkFun entrypoint.
+- `relod_sparkfun_v8_0/platformio.ini` - production build configuration.
+- `relod_sparkfun_v8_0/VERSION` - release version source.
+- `docs/ota-release-runbook.md` - candidate publishing, hardware tests and promotion.
+- `relod_firmware/relod_firmware.ino` and root `platformio.ini` - XIAO testing target.
 - `libraries/` - vendored Arduino libraries required by the firmware.
 - `docs/measurement-payload.md` - current payload contract.
 - `docs/ota-safety.md` - OTA update guardrails.
 - `hello_world_test/` - separate toolchain smoke test for XIAO ESP32-C6.
 
-Historical sketches and old ESP-IDF files remain for archaeology only. Treat `relod_firmware/relod_firmware.ino` and `platformio.ini` as the production path unless hardware owners say otherwise.
+Historical sketches and old ESP-IDF files remain for reference. Use the explicit SparkFun project/environment for production builds.
 
-The active partition scheme is `ota_nofs_4MB.csv`: two OTA-capable app slots and no filesystem partition. The firmware does not use SPIFFS/LittleFS, and this keeps enough room for the Arduino ESP32 3.x image while preserving OTA updates.
+SparkFun uses `default_16MB.csv` with two `0x640000`-byte OTA app slots. The separate XIAO testing target uses `ota_nofs_4MB.csv`.
 
 ## Current Payload Direction
 
@@ -85,4 +88,4 @@ See `docs/measurement-payload.md` for field names, units, and caveats.
 
 Run `scripts/check` before opening a PR. CI also runs a PlatformIO build on every push and PR.
 
-No local command can prove real sensor behavior. Any hardware-facing release still needs a physical XIAO ESP32-C6 validation pass before rollout.
+No local command can prove real sensor behavior. Production releases require a physical SparkFun validation pass before rollout. Follow the [release runbook](docs/ota-release-runbook.md).

@@ -1,5 +1,12 @@
 # OTA Safety
 
+Production SparkFun releases follow [the OTA release runbook](ota-release-runbook.md).
+They require registered board/profile identity, a newer version, authenticated
+HTTPS, matching size and SHA-256, and hardware review before promotion.
+
+The remaining sections describe the separate legacy XIAO testing target. They
+do not define the SparkFun protocol-2 contract or permit a production rollout.
+
 Firmware checks:
 
 ```text

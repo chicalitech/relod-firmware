@@ -1,0 +1,4 @@
+{
+  "recommendations": ["pioarduino.pioarduino-ide", "ms-vscode.cpptools"],
+  "unwantedRecommendations": ["platformio.platformio-ide"]
+}
